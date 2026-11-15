@@ -30,7 +30,7 @@ defineReplace(declareAlgorithm) {
     SOURCES += $${algorithmName}.cpp
     HEADERS += $${algorithmName}.h
 
-    DISTFILES += $${algorithmName}.xml
+    # DISTFILES += $${algorithmName}.xml
 
     # Resources (write resource file containing the xml file)
     RESOURCES_FILE_TEXT =                    \

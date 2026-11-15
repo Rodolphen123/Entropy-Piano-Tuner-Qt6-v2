@@ -60,7 +60,7 @@
 #include "dialogs/autoclosingmessagebox.h"
 #include "dialogs/donotshowagainmessagebox.h"
 #include "dialogs/editpianosheet/editpianosheetdialog.h"
-#include "dialogs/log/logviewer.h"
+//#include "dialogs/log/logviewer.h"
 #include "dialogs/plotsdialog/plotsdialog.h"
 #include "implementations/settingsforqt.h"
 #include "options/optionsdialog.h"
@@ -827,8 +827,8 @@ void MainWindow::onAbout() {
 }
 
 void MainWindow::onViewLog() {
-  LogViewer logViewer(LogViewer::CURRENT_LOG, this);
-  logViewer.exec();
+//  LogViewer logViewer(LogViewer::CURRENT_LOG, this);
+//  logViewer.exec();
 }
 
 void MainWindow::onModeIdle(bool checked) {

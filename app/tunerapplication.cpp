@@ -34,8 +34,7 @@
 #include "core/config.h"
 #include "core/messages/messagehandler.h"
 #include "core/system/eptexception.h"
-
-#include "dialogs/log/logviewer.h"
+// #include "dialogs/log/logviewer.h"
 #include "implementations/platformtools.h"
 #include "implementations/projectmanagerforqt.h"
 #include "implementations/settingsforqt.h"
@@ -105,8 +104,8 @@ void TunerApplication::init() {
             tr("The application exited unexpectedly on the last run. Do you "
                "want to view the last log?"),
             QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
-      LogViewer v(LogViewer::PREVIOUS_LOG, m);
-      v.exec();
+     // LogViewer v(LogViewer::PREVIOUS_LOG, m);
+     // v.exec();
     }
   }
 

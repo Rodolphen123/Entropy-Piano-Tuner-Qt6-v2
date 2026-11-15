@@ -17,7 +17,7 @@ fftw3 {
 
 libuv {
     !contains(EPT_THIRDPARTY_CONFIG, system_libuv) {
-        SUBDIRS += libuv
+      #  SUBDIRS += libuv
     }
 }
 

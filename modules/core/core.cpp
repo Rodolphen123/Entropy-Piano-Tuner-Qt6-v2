@@ -30,6 +30,15 @@
 #include "messages/messagemodechanged.h"
 #include "system/platformtoolscore.h"
 
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "iphlpapi.lib")
+#pragma comment(lib, "userenv.lib")
+#pragma comment(lib, "psapi.lib")
+#pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "dbghelp.lib")
+
 //-----------------------------------------------------------------------------
 //                              Core constructor
 //-----------------------------------------------------------------------------

@@ -187,9 +187,9 @@ winrt {
 
     PLUGIN_DIR ~= s,/,\\,g
 
-    QMAKE_POST_LINK += \
-        $$sprintf($$QMAKE_MKDIR_CMD, $$quote($$PLUGIN_DIR\\midi)) $$escape_expand(\\n\\t) \
-        $$QMAKE_COPY $$quote($$(QTDIR)\\plugins\\midi\\$$PLUGIN_FILE) $$quote($$PLUGIN_DIR\\midi\\$$PLUGIN_FILE) $$escape_expand(\\n\\t)
+#    QMAKE_POST_LINK += \
+#        $$sprintf($$QMAKE_MKDIR_CMD, $$quote($$PLUGIN_DIR\\midi)) $$escape_expand(\\n\\t) \
+#        $$QMAKE_COPY $$quote($$(QTDIR)\\plugins\\midi\\$$PLUGIN_FILE) $$quote($$PLUGIN_DIR\\midi\\$$PLUGIN_FILE) $$escape_expand(\\n\\t)
 } else:winphone {
 } else:win32 {
     # windows desktop
@@ -198,15 +198,15 @@ winrt {
 # dlls
 winrt|winphone|win32|win32-g++ {
     # copy external dlls
-    DLLS ~= s,/,\\,g
-    DESTDIR_WIN = $$DESTDIR
-    DESTDIR_WIN ~= s,/,\\,g
-    for(FILE,DLLS){
+    #DLLS ~= s,/,\\,g
+    #DESTDIR_WIN = $$DESTDIR
+    #DESTDIR_WIN ~= s,/,\\,g
+    #for(FILE,DLLS){
         # skip files, that are already built in the currect destination
-        !equals(FILE, $${DESTDIR_WIN}\\$$basename(FILE)) {
-            QMAKE_POST_LINK += $$quote(cmd /c $$QMAKE_COPY $${FILE} $${DESTDIR_WIN} $$escape_expand(\n\t))
-        }
-    }
+     #   !equals(FILE, $${DESTDIR_WIN}\\$$basename(FILE)) {
+      #      QMAKE_POST_LINK += $$quote(cmd /c $$QMAKE_COPY $${FILE} $${DESTDIR_WIN} $$escape_expand(\n\t))
+      #  }
+   #}
 } else:linux {
     # copy so's, that they are found by the executable
     for (FILE,DLLS) {
@@ -240,7 +240,7 @@ HEADERS  += \
     dialogs/algorithmdialog/algorithmdialog.h \
     dialogs/algorithmdialog/algorithmdialogparameterupdatetimer.h \
     dialogs/editpianosheet/editpianosheetdialog.h \
-    dialogs/log/logviewer.h \
+#   #  dialogs/log/logviewer.h \
     dialogs/plotsdialog/centralplotframe.h \
     dialogs/plotsdialog/keyindexscaledraw.h \
     dialogs/plotsdialog/keyindexscaleengine.h \
@@ -310,7 +310,7 @@ SOURCES +=  \
     dialogs/algorithmdialog/algorithmdialog.cpp \
     dialogs/algorithmdialog/algorithmdialogparameterupdatetimer.cpp \
     dialogs/editpianosheet/editpianosheetdialog.cpp \
-    dialogs/log/logviewer.cpp \
+#  #   dialogs/log/logviewer.cpp \
     dialogs/plotsdialog/plotsdialog.cpp \
     dialogs/plotsdialog/centralplotframe.cpp \
     dialogs/plotsdialog/keyindexscaleengine.cpp \
@@ -404,7 +404,7 @@ winrt {
 
 FORMS += \
     dialogs/editpianosheet/editpianosheetdialog.ui \
-    dialogs/log/logviewer.ui \
+#  #   dialogs/log/logviewer.ui \
     mainwindow/mainwindow.ui \
 
 

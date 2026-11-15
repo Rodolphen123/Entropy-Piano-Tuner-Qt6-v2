@@ -1,6 +1,6 @@
 #include <windows.h>
 
-IDI_ICON1	ICON	"C:\\Users\\scopp\\Downloads\\Entropy-Piano-Tuner-master\\appstore\\icons\\entropytuner.ico"
+IDI_ICON1	ICON	"E:\\DEV\\Rodolphe\\Entropy-Piano-Tuner-Qt6\\appstore\\icons\\entropytuner.ico"
 
 VS_VERSION_INFO VERSIONINFO
 	FILEVERSION 0,0,0,0
