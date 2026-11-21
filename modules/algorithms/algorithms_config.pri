@@ -1,4 +1,4 @@
-PUBLISH_ALGORITHMS += entropyminimizer pitchraise resettorecording
+PUBLISH_ALGORITHMS += entropyminimizer entropyminimizerv2 pitchraise resettorecording
 TEST_ALGORITHMS += examplealgorithm
 
 ALGORITHM_NAMES += $$PUBLISH_ALGORITHMS

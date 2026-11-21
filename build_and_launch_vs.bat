@@ -1,4 +1,5 @@
 @echo off
+cd /d "%~dp0"
 echo [1/4] Configuration Qt 6 et Visual Studio x64...
 set PATH=E:\Qt\6.10.2\msvc2022_64\bin;%PATH%
 call "E:\DEV\VC\Auxiliary\Build\vcvarsall.bat" x64

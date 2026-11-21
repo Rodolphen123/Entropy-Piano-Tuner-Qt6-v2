@@ -70,3 +70,7 @@ qrc_*.cpp
 /docs/*
 /platforms/android/gradle.properties
 /platforms/android/local.properties
+
+# Fichiers de compilation du moteur V2
+modules/algorithms/entropyminimizerv2/debug/
+modules/algorithms/entropyminimizerv2/release/
