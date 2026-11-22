@@ -52,6 +52,7 @@ typedef std::map<double,double> FFTPolygon;
 struct EPT_EXTERN FFTData {
     FFTWVector fft;         ///< The actual fft
     int samplingRate = -1;  ///< The sampling rate of the fft
+    int N_fft = -1;         ///< Exact FFT length (signal length before FFT). -1 = not set (legacy behaviour).
 
     ///////////////////////////////////////////////////////////////////////////////
     /// \brief Function to validate the fft data.
@@ -65,12 +66,29 @@ struct EPT_EXTERN FFTData {
     }
 
     ///////////////////////////////////////////////////////////////////////////////
+    /// \brief Get the exact FFT length.
+    ///
+    /// If N_fft has not been set (legacy .ept files, old code paths), fall back
+    /// to the historical approximation 2 * fft.size(), which reproduces the
+    /// behaviour of the original implementation. Otherwise use the true
+    /// signal length stored in N_fft.
+    ///
+    /// \return The exact FFT length N_fft, or the legacy approximation.
+    ///////////////////////////////////////////////////////////////////////////////
+    int getNfft() const {
+          return N_fft > 0 ? N_fft : 2 * static_cast<int>(fft.size());
+    
+    }
+    
+
+    ///////////////////////////////////////////////////////////////////////////////
     /// \brief Function to get the time of the signal in seconds
     /// \return 2 * fft.size() / samplingRate
     ///
     ///////////////////////////////////////////////////////////////////////////////
     double getTime() {
-        return fft.size() * 2.0 / samplingRate;
+       // return fft.size() * 2.0 / samplingRate;
+        return getNfft() / static_cast<double>(samplingRate);
     }
 };
 

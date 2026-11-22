@@ -16,7 +16,10 @@
  * You should have received a copy of the GNU General Public License along with
  * Entropy Piano Tuner. If not, see http://www.gnu.org/licenses/.
  *****************************************************************************/
-
+ // C9: enable the frequency-shift correction in analyse().
+ // Disabled by default: preserves the legacy behaviour. Enable only after
+ // validation on synthetic signals (plan 0.1 bis).
+ // #define ENABLE_FREQ_SHIFT_CORRECTION 1
 //=============================================================================
 //                               FFT Analyzer
 //=============================================================================
@@ -127,6 +130,13 @@ std::pair<FFTAnalyzerErrorTypes, std::shared_ptr<Key> > FFTAnalyzer::analyse (
 
             double cents = estimateFrequencyShift();
             LogV("FFTAnalyzer: frequency correction cents C = %f", cents);
+            // C9: apply the frequency shift correction (behind a flag,
+            // disabled by default so the legacy behaviour is preserved).
+            // #define ENABLE_FREQ_SHIFT_CORRECTION 1
+            #ifdef ENABLE_FREQ_SHIFT_CORRECTION
+            f *= pow(2.0, cents / 1200.0);
+            LogV("FFTAnalyzer: corrected frequency f = %f", f);
+            #endif
         }
 
         // Create a new key:
@@ -295,7 +305,10 @@ FrequencyDetectionResult FFTAnalyzer::detectFrequencyOfKnownKey (
 
 void FFTAnalyzer::constructLogBinnedSpectrum(FFTDataPointer fftData, SpectrumType &spectrum)
 {
-    const double b = 2.0 * fftData->fft.size() / fftData->samplingRate;
+    LogD("constructLogBinnedSpectrum: N_fft = %d, getNfft() = %d",
+        fftData->N_fft, fftData->getNfft());
+   // const double b = 2.0 * fftData->fft.size() / fftData->samplingRate;
+    const double b = fftData->getNfft() / static_cast<double>(fftData->samplingRate);
     std::function<double(double)> mtoq = [this,b] (double m)
              { return b * Key::IndexToFrequency(m); };
     MathTools::coarseGrainSpectrum (fftData->fft,spectrum,mtoq,0.25);
@@ -455,18 +468,38 @@ double FFTAnalyzer::findAccuratePeakFrequency(FFTDataPointer fftData, double f, 
 {
     // Define the bounds in which the peak will be searched
     const double factor = 1.0 + 0.000577623 * cents;
-    const double b = 2.0 * fftData->fft.size() / fftData->samplingRate;
-    int q1 = MathTools::roundToInteger(b*f/factor);
-    int q2 = MathTools::roundToInteger(b*f*factor);
+    // const double b = 2.0 * fftData->fft.size() / fftData->samplingRate;
+    const double b = fftData->getNfft() / static_cast<double>(fftData->samplingRate);
+    int q1 = MathTools::roundToInteger(b * f / factor);
+    int q2 = MathTools::roundToInteger(b * f * factor);
 
     // search for the maximum
     if (q1 > 0 and q2 < static_cast<int>(fftData->fft.size()))
     {
-        double fftmax=0;
-        int qmax=q1;
-        for (int q=q1; q<q2; ++q) if (fftData->fft[q]>fftmax)
-        { fftmax = fftData->fft[q]; qmax=q; }
-        return qmax/b;
+        double fftmax = 0;
+        int qmax = q1;
+        for (int q = q1; q < q2; ++q) if (fftData->fft[q] > fftmax)
+        {
+            fftmax = fftData->fft[q]; qmax = q;
+        }
+
+        // Sub-bin parabolic interpolation on ln(amplitude) (C9).
+        // Guard qmax at the edges of the search window: if the maximum is
+        // at the boundary, there is no reliable parabola, return the bin.
+        if (qmax > q1 and qmax < q2 - 1 and fftData->fft[qmax] > 0)
+        {
+            const double y1 = std::log(fftData->fft[qmax - 1] + 1e-300);
+            const double y2 = std::log(fftData->fft[qmax] + 1e-300);
+            const double y3 = std::log(fftData->fft[qmax + 1] + 1e-300);
+            const double denom = y1 - 2.0 * y2 + y3;
+            if (denom != 0.0)
+            {
+                const double delta = (y1 - y3) / (2.0 * denom);
+                if (std::fabs(delta) < 1.0)
+                    return (qmax + delta) / b;
+            }
+        }
+        return qmax / b;
     }
     else return f;
 }

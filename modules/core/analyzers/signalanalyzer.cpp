@@ -612,29 +612,33 @@ double SignalAnalyzer::signalPreprocessing(FFTWVector &signal)
 /// On ROLE_RECORD_KEYSTRO this will peramaentely send NewFFT
 ///////////////////////////////////////////////////////////////////////////////
 
-void SignalAnalyzer::signalProcessing(FFTWVector &signal, int samplingrate) {
+void SignalAnalyzer::signalProcessing(FFTWVector& signal, int samplingrate) {
     if (signal.size() == 0) {
         LogW("Empty signal. Cancelling the signal processing");
         return;
-    } else if (samplingrate <= 0) {
+    }
+    else if (samplingrate <= 0) {
         LogW("Invalid sampling rate. Cancelling the signal processing");
         return;
     }
 
     mPowerspectrum = std::make_shared<FFTData>();
     mPowerspectrum->samplingRate = samplingrate;
+    mPowerspectrum->N_fft = static_cast<int>(signal.size());
     PerformFFT(signal, mPowerspectrum->fft);
+    //LogI("signalProcessing: N_fft = %d, fft.size() = %d", mPowerspectrum->N_fft, static_cast<int>(mPowerspectrum->fft.size()));
+
     if (cancelThread()) return;
 
     // The FFT is too long to be plotted. Therefore, we
     // create here a shorter polygon and transmit it by a message
     std::shared_ptr<FFTPolygon> polygon = std::make_shared<FFTPolygon>();
-    createPolygon (mPowerspectrum->fft, *polygon.get());
+    createPolygon(mPowerspectrum->fft, *polygon.get());
 
     MessageHandler::send<MessageNewFFTCalculated>
-            ((!mRecording) ? MessageNewFFTCalculated::FFTMessageTypes::FinalFFT :
-                       MessageNewFFTCalculated::FFTMessageTypes::NewFFT,
-             mPowerspectrum, polygon);
+        ((!mRecording) ? MessageNewFFTCalculated::FFTMessageTypes::FinalFFT :
+            MessageNewFFTCalculated::FFTMessageTypes::NewFFT,
+            mPowerspectrum, polygon);
 
     // recognize key
     mKeyRecognizer.recognizeKey(false, mPiano, mPowerspectrum, mSelectedKey, mKeyForced);

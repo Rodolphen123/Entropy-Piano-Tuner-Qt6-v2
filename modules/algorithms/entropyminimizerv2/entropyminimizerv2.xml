@@ -66,4 +66,31 @@
             <string lang="zh">该值显示熵的当前计算值。值为0表示没有计算。</string>
         </description>
     </param>
+
+	<param id="scale" type="double" default="1.0" min="0.1" max="10.0" slider="true" spinBox="true" precision="2">
+		<label>
+			<string>Mollifier scale</string>
+			<string lang="de">Mollifikator-Skala</string>
+			<string lang="zh">软化器缩放</string>
+		</label>
+		<description>
+			<string>Scale factor for the mollifier width. 1.0 reproduces the legacy behaviour.</string>
+			<string lang="de">Skalierungsfaktor für die Breite des Mollifikators. 1.0 reproduziert das bisherige Verhalten.</string>
+			<string lang="zh">软化器宽度的缩放因子。1.0 表示保持原有行为。</string>
+		</description>
+	</param>
+
+	<param id="maxBassWidth" type="double" default="50.0" min="1.0" max="500.0" slider="true" spinBox="true" precision="1">
+		<label>
+			<string>Max bass width (cents)</string>
+			<string lang="de">Max. Bassbreite (Cent)</string>
+			<string lang="zh">最大低音宽度（音分）</string>
+		</label>
+		<description>
+			<string>Maximum mollifier width in the bass, in cents. 1e9 disables the cap (legacy behaviour).</string>
+			<string lang="de">Maximale Mollifikatorbreite im Bass, in Cent. 1e9 deaktiviert die Begrenzung (bisheriges Verhalten).</string>
+			<string lang="zh">低音区软化器的最大宽度，单位为音分。1e9 表示不限制（原有行为）。</string>
+		</description>
+	</param>
+	
 </algorithm>

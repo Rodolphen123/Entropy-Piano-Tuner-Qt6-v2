@@ -233,10 +233,17 @@ bool EntropyMinimizer::performAuditoryPreprocessing()
     AP.improveHighFrequencyPeaks();
 
     LogI("EntropyMinimizerV2: Mollify spectral lines");
-    for (auto &key : mKeys)
+    // V2 (cahier des charges 1.5): read scale and maxBassWidth from the XML
+    // parameters. Defaults (1.0 and 50.0) reproduce the legacy behaviour
+    // when the XML entries are missing.
+    double mollifierScale = mParameters->getDoubleParameter("scale");
+    double maxBassWidth = mParameters->getDoubleParameter("maxBassWidth");
+    LogD("EntropyMinimizerV2: mollifierScale = %f, maxBassWidth = %f",
+        mollifierScale, maxBassWidth);
+    for (auto& key : mKeys)
     {
-        AP.applyMollifier(key);
-        showCalculationProgress(key,0,1);
+        AP.applyMollifier(key, mollifierScale, maxBassWidth);
+        showCalculationProgress(key, 0, 1);
         if (cancelThread()) return false;
     }
 

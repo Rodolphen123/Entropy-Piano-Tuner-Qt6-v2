@@ -64,7 +64,9 @@ public:
 
     void extrapolateInharmonicity();
     void improveHighFrequencyPeaks();
-    void applyMollifier(Key &key);
+    // V2 (cahier des charges 1.5): scale = 1 reproduces the legacy width.
+    // maxBassWidthCents caps the mollifier width in the bass (C7). 1e9 = no cap (legacy).
+    void applyMollifier(Key& key, double scale = 1.0, double maxBassWidthCents = 50.0);
 
 
 private:

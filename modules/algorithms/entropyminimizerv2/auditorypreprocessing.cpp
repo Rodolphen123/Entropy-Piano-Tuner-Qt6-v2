@@ -418,30 +418,37 @@ void AuditoryPreprocessing::improveHighFrequencyPeaks ()
 //                  Mollify
 //-----------------------------------------------------------------------------
 
-void AuditoryPreprocessing::applyMollifier (Key &key)
+void AuditoryPreprocessing::applyMollifier(Key& key, double scale, double maxBassWidthCents)
 {
-    SpectrumType &spectrum = key.getSpectrum();
+    LogD("applyMollifier: scale = %f, maxBassWidthCents = %f", scale, maxBassWidthCents);
+    SpectrumType& spectrum = key.getSpectrum();
     SpectrumType copy = spectrum;
     //double f1 = key.getRecordedFrequency();
 
-
     //SpectrumType copy = spectrum;
     int M = static_cast<int>(NumberOfBins);
-    for (int m=0; m<M; ++m)
+    for (int m = 0; m < M; ++m)
     {
         double f = mtof(m);
-        const double df=55.0/f+f/2000.0;
-        int dm = MathTools::roundToInteger(ftom(f+df)) - m;
-        double sum=0,norm=0;
-        for (int ms = std::max(1,m-3*dm); ms<=std::min(m+3*dm,M-1); ms++)
+        // V2 (cahier des charges 1.5): scale = 1 reproduces the legacy width.
+        // scale > 1 widens the mollifier, scale < 1 narrows it.
+        double df = scale * (55.0 / f + f / 2000.0);
+        int dm = MathTools::roundToInteger(ftom(f + df)) - m;
+        // V2 (cahier des charges 1.5, C7): cap the width in the bass.
+        // dm is in bins of 1 cent, so maxBassWidthCents is in cents.
+        // 1e9 (default) means no cap, i.e. legacy behaviour.
+        if (dm < 1) dm = 1;                          // guard against dm = 0
+        if (dm > maxBassWidthCents)                  // cap in the bass
+            dm = static_cast<int>(maxBassWidthCents);
+        double sum = 0, norm = 0;
+        for (int ms = std::max(1, m - 3 * dm); ms <= std::min(m + 3 * dm, M - 1); ms++)
         {
-            double weight = exp(-1.0*(ms-m)*(ms-m)/dm/dm);
-            norm+=weight;
-            sum+=copy[ms]*weight;
+            double weight = exp(-1.0 * (ms - m) * (ms - m) / dm / dm);
+            norm += weight;
+            sum += copy[ms] * weight;
         }
-        if (norm>0) spectrum[m]=sum/norm;
+        if (norm > 0) spectrum[m] = sum / norm;
     }
-
 }
 
 
