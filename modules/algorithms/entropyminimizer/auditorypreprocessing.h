@@ -58,6 +58,10 @@ public:
     void cleanSpectrum(Key &key);                // reduce noise in the spectra
     void cutLowFrequencies(Key &key);           // cut irrelevant low and high frequ
 
+    // V2 (cahier des charges 1.3): surcharge optionnelle de breakKeyIndex.
+    // 0 (ou valeur <= 0) signifie "utiliser numberOfBassKeys du piano".
+    void setBreakKeyIndex(int k) { mBreakKeyIndex = k; }
+
     void initializeSPLAFilter();    // define dBA filtering curve
     void convertToSPLA(SpectrumType &s);                 // compute A-weighted sound pressure
     void convertToLoudness (SpectrumType &s);
@@ -77,6 +81,9 @@ private:
     int mNumberOfKeys;
     int mKeyNumberOfA4;
     std::vector<double> mdBA;           // vector holding dBA curve
+
+    // V2 (1.3): 0 = auto (numberOfBassKeys du piano)
+    int mBreakKeyIndex = 0;
 
 };
 

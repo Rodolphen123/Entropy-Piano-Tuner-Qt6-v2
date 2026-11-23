@@ -92,5 +92,18 @@
 			<string lang="zh">低音区软化器的最大宽度，单位为音分。1e9 表示不限制（原有行为）。</string>
 		</description>
 	</param>
-	
+
+	<param id="breakKeyIndex" type="int" default="0" min="0" max="127" slider="true" spinBox="true">
+		<label>
+			<string>Break key index</string>
+			<string lang="de">Bruchstelle (Tastenindex)</string>
+			<string lang="zh">分段键索引</string>
+		</label>
+		<description>
+			<string>Index of the first plain (unwound) string. Keys [0 .. breakKeyIndex-1] are wound bass strings, keys [breakKeyIndex .. N-1] are plain strings. The robust ln(B) fit is done separately on each segment. 0 means: use the numberOfBassKeys from the piano info (default).</string>
+			<string lang="de">Index der ersten unumwickelten Saite. Tasten [0 .. breakKeyIndex-1] sind umwickelte Basssaiten, Tasten [breakKeyIndex .. N-1] sind blanke Saiten. Der robuste ln(B)-Fit wird getrennt auf jedem Segment durchgeführt. 0 bedeutet: numberOfBassKeys aus den Piano-Infos verwenden (Standard).</string>
+			<string lang="zh">第一根裸弦的键索引。键 [0 .. breakKeyIndex-1] 为缠弦低音，键 [breakKeyIndex .. N-1] 为裸弦。ln(B) 的稳健拟合在每个分段上独立进行。0 表示使用钢琴信息中的 numberOfBassKeys（默认）。</string>
+		</description>
+	</param>
+
 </algorithm>

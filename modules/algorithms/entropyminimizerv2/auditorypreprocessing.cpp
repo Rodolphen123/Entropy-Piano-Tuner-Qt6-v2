@@ -25,6 +25,8 @@
 
 #include <iostream>
 
+#include <fstream>
+
 #include "core/system/eptexception.h"
 #include "core/messages/messagehandler.h"
 #include "core/messages/messagecaluclationprogress.h"
@@ -325,6 +327,46 @@ void AuditoryPreprocessing::convertToSPLA (SpectrumType &spectrum)
     }
 }
 
+//-----------------------------------------------------------------------------
+//               V2 (1.3) : ajustement Theil-Sen de y = a*x + b
+//-----------------------------------------------------------------------------
+
+namespace {
+
+    // Theil-Sen : médiane des pentes deux à deux, puis médiane des résidus
+    // pour l'ordonnée à l'origine. Robuste aux outliers, O(n^2) en temps.
+    // Avec n <= 85 (clavier standard) c'est négligeable.
+    int theilSenFit(const std::vector<double>& x,
+        const std::vector<double>& y,
+        double& a, double& b)
+    {
+        const int n = static_cast<int>(x.size());
+        if (n < 2) { a = 0.0; b = 0.0; return n; }
+
+        std::vector<double> slopes;
+        slopes.reserve(static_cast<size_t>(n) * (n - 1) / 2);
+        for (int i = 0; i < n; ++i)
+            for (int j = i + 1; j < n; ++j)
+            {
+                const double dx = x[j] - x[i];
+                if (dx != 0.0) slopes.push_back((y[j] - y[i]) / dx);
+            }
+
+        if (slopes.empty()) { a = 0.0; b = 0.0; return n; }
+
+        std::sort(slopes.begin(), slopes.end());
+        const size_t m = slopes.size();
+        a = (m % 2 == 1) ? slopes[m / 2] : 0.5 * (slopes[m / 2 - 1] + slopes[m / 2]);
+
+        std::vector<double> intercepts(n);
+        for (int i = 0; i < n; ++i) intercepts[i] = y[i] - a * x[i];
+        std::sort(intercepts.begin(), intercepts.end());
+        b = (n % 2 == 1) ? intercepts[n / 2] : 0.5 * (intercepts[n / 2 - 1] + intercepts[n / 2]);
+
+        return n;
+    }
+
+} // namespace
 
 //-----------------------------------------------------------------------------
 //               extrapolate missing inharmonicity estimates
@@ -333,47 +375,160 @@ void AuditoryPreprocessing::convertToSPLA (SpectrumType &spectrum)
 ///////////////////////////////////////////////////////////////////////////////
 /// \brief Extrapolate inharmonicity and estimate missing values
 ///
-/// In the upper half of the manual, the inharmonicity of the strings of
-/// a piano grows typically exponentially with the key index. During
-/// recording, however, some of the inharmonicity values are usually not
-/// correctly measured. This function identifies the outlyers and replaces
-/// them by a suitable interpolated value. Note that this works only with
-/// the standard design of pianos (parallel strings of the same kind in
-/// the upper half).
+/// V2 (cahier des charges 1.3) : ajustement robuste de ln B en DEUX segments
+///   - segment 1 : cordes filées, touches [0 .. breakKeyIndex-1]
+///   - segment 2 : cordes nues,   touches [breakKeyIndex .. N-1]
+///
+/// Chaque segment est ajusté par Theil-Sen (médiane des pentes), robuste
+/// aux outliers — c'est exactement le problème observé sur l'Erard 1951
+/// (B bruité dans les graves/médiums).
+///
+/// Repli : si un segment a moins de 6 valeurs valides (B > 0), on utilise
+/// getExpectedInharmonicity(f1) pour toutes les touches de ce segment.
+///
+/// Les anciennes valeurs sont conservées en commentaire pour référence.
 ///////////////////////////////////////////////////////////////////////////////
 
 void AuditoryPreprocessing::extrapolateInharmonicity()
 {
-    const int firstkey = mKeyNumberOfA4-8;
-    double K=0, Y=0, KK=0, KY=0, N=0, BE=0;
-    for (int k = firstkey; k < mNumberOfKeys; ++k)
+    // Ancien code (conservé pour référence) :
+    // const int firstkey = mKeyNumberOfA4-8;
+    // double K=0, Y=0, KK=0, KY=0, N=0, BE=0;
+    // for (int k = firstkey; k < mNumberOfKeys; ++k)
+    // {
+    //     if (N>1)
+    //     {
+    //         double a = (N*KY-K*Y)/(N*KK-K*K);
+    //         double b = (KK*Y-K*KY)/(N*KK-K*K);
+    //         BE = exp(a*k+b);
+    //     }
+    //     double B = mKeys[k].getMeasuredInharmonicity();
+    //     bool B_is_valid = (B>0);
+    //     if (B>0 and BE>0 and N>5) if (fabs(log(B/BE))>0.2) B_is_valid=false;
+    //     if (B_is_valid)
+    //     {
+    //         double y = log(B);
+    //         K+=k; Y+=y; KK+=k*k; KY+=k*y; N++;
+    //     }
+    //     else
+    //     {
+    //         if (BE==0)
+    //         {
+    //             double f1 = mPiano.getEqualTempFrequency(k,0,440);
+    //             BE = mPiano.getExpectedInharmonicity(f1);
+    //         }
+    //         mKeys[k].setMeasuredInharmonicity(BE);
+    //     }
+    // }
+
+    // --------------------------------------------------------------------
+    // Résolution de breakKeyIndex (cahier des charges 1.3) :
+    //   - surcharge via le paramètre XML "breakKeyIndex" (setBreakKeyIndex),
+    //   - 0 ou valeur <= 0 = utiliser numberOfBassKeys du piano (défaut),
+    //   - bornage dans [0, mNumberOfKeys].
+    // --------------------------------------------------------------------
+    int breakKeyIndex = (mBreakKeyIndex > 0) ? mBreakKeyIndex
+        : mKeyboard.getNumberOfBassKeys();
+    if (breakKeyIndex < 0) breakKeyIndex = 0;
+    if (breakKeyIndex > mNumberOfKeys) breakKeyIndex = mNumberOfKeys;
+
+    // --------------------------------------------------------------------
+    // Étape 1 : collecter les points valides (k, ln B) par segment
+    // --------------------------------------------------------------------
+    auto collectSegment = [this](int kBegin, int kEnd,
+        std::vector<double>& xs,
+        std::vector<double>& ys)
+        {
+            for (int k = kBegin; k < kEnd; ++k)
+            {
+                const double B = mKeys[k].getMeasuredInharmonicity();
+                if (B > 0.0)
+                {
+                    xs.push_back(static_cast<double>(k));
+                    ys.push_back(std::log(B));
+                }
+            }
+        };
+
+    std::vector<double> x1, y1, x2, y2;
+    collectSegment(0, breakKeyIndex, x1, y1);  // cordes filées
+    collectSegment(breakKeyIndex, mNumberOfKeys, x2, y2);  // cordes nues
+
+    LogD("extrapolateInharmonicity: breakKeyIndex=%d, "
+        "segment1=%d points, segment2=%d points",
+        breakKeyIndex, static_cast<int>(x1.size()), static_cast<int>(x2.size()));
+
+    // --------------------------------------------------------------------
+    // Étape 2 : ajuster chaque segment, ou marquer comme "non ajustable"
+    // --------------------------------------------------------------------
+    const int minPointsForFit = 6;
+    double a1 = 0.0, b1 = 0.0, a2 = 0.0, b2 = 0.0;
+    const bool fit1 = (static_cast<int>(x1.size()) >= minPointsForFit);
+    const bool fit2 = (static_cast<int>(x2.size()) >= minPointsForFit);
+
+    if (fit1) theilSenFit(x1, y1, a1, b1);
+    if (fit2) theilSenFit(x2, y2, a2, b2);
+
+    // --------------------------------------------------------------------
+    // Étape 3 : appliquer l'ajustement (ou le repli) sur TOUTES les touches.
+    //
+    // Note : on écrase aussi les valeurs valides du segment, pour que la
+    // courbe soit lisse — c'est le comportement voulu par le cahier des
+    // charges ("ajustement robuste ... en deux segments"). Si tu préfères
+    // ne remplacer que les valeurs manquantes/aberrantes, il suffit de
+    // tester B > 0 avant d'écraser (voir plus bas).
+    // --------------------------------------------------------------------
+    for (int k = 0; k < mNumberOfKeys; ++k)
     {
-        if (N>1)
+        const bool inSegment1 = (k < breakKeyIndex);
+        const bool haveFit = inSegment1 ? fit1 : fit2;
+
+        double BE = 0.0;
+        if (haveFit)
         {
-            double a = (N*KY-K*Y)/(N*KK-K*K);
-            double b = (KK*Y-K*KY)/(N*KK-K*K);
-            BE = exp(a*k+b);
-        }
-        double B = mKeys[k].getMeasuredInharmonicity();
-        bool B_is_valid = (B>0);
-        if (B>0 and BE>0 and N>5) if (fabs(log(B/BE))>0.2) B_is_valid=false;
-        if (B_is_valid)
-        {
-            double y = log(B);
-            K+=k; Y+=y; KK+=k*k; KY+=k*y; N++;
+            const double a = inSegment1 ? a1 : a2;
+            const double b = inSegment1 ? b1 : b2;
+            BE = std::exp(a * static_cast<double>(k) + b);
         }
         else
         {
-            if (BE==0)
-            {
-                double f1 = mPiano.getEqualTempFrequency(k,0,440);
-                BE = mPiano.getExpectedInharmonicity(f1);
-            }
-            mKeys[k].setMeasuredInharmonicity(BE);
+            // Repli : moins de 6 valeurs valides dans ce segment.
+            const double f1 = mPiano.getEqualTempFrequency(k, 0, 440);
+            BE = mPiano.getExpectedInharmonicity(f1);
         }
-    }
-}
 
+        // Garde-fou : B doit rester dans une plage physique plausible.
+        if (!(BE > 0.0) or BE > 0.5)
+        {
+            const double f1 = mPiano.getEqualTempFrequency(k, 0, 440);
+            BE = mPiano.getExpectedInharmonicity(f1);
+        }
+
+        mKeys[k].setMeasuredInharmonicity(BE);
+    }
+
+    #ifdef DEBUG_EXTRAPOLATE_INHARMONICITY
+    // V2 (1.3) debug: logs de diagnostic pour validation hors-ligne.
+    LogI("extrapolateInharmonicity: mBreakKeyIndex=%d, numberOfBassKeys=%d, breakKeyIndex=%d",
+        mBreakKeyIndex, mKeyboard.getNumberOfBassKeys(), breakKeyIndex);
+    LogI("extrapolateInharmonicity: seg1=%d pts, seg2=%d pts",
+        static_cast<int>(x1.size()), static_cast<int>(x2.size()));
+    if (fit1) LogI("extrapolateInharmonicity: seg1 Theil-Sen a=%f b=%f", a1, b1);
+    if (fit2) LogI("extrapolateInharmonicity: seg2 Theil-Sen a=%f b=%f", a2, b2);
+    LogI("extrapolateInharmonicity: k=0 B=%f, k=16 B=%f, k=28 B=%f, k=84 B=%f",
+        mKeys[0].getMeasuredInharmonicity(),
+        mKeys[16].getMeasuredInharmonicity(),
+        mKeys[28].getMeasuredInharmonicity(),
+        mKeys[84].getMeasuredInharmonicity());
+
+    {
+        std::ofstream os("0-extrapolated-inharmonicity.dat");
+        for (int k = 0; k < mNumberOfKeys; ++k)
+            os << k << " " << mKeys[k].getMeasuredInharmonicity() << std::endl;
+    }
+    #endif // DEBUG_EXTRAPOLATE_INHARMONICITY
+
+}
 
 //-----------------------------------------------------------------------------
 //                  Improve high-frequency spectral lines

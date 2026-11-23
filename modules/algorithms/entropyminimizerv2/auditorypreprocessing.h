@@ -68,6 +68,10 @@ public:
     // maxBassWidthCents caps the mollifier width in the bass (C7). 1e9 = no cap (legacy).
     void applyMollifier(Key& key, double scale = 1.0, double maxBassWidthCents = 50.0);
 
+    // V2 (cahier des charges 1.3): surcharge optionnelle de breakKeyIndex.
+   // 0 (ou valeur <= 0) signifie "utiliser numberOfBassKeys du piano".
+    void setBreakKeyIndex(int k) { mBreakKeyIndex = k; }
+
 
 private:
     static double ftom (double f) { return Key::FrequencyToRealIndex(f); }
@@ -79,6 +83,10 @@ private:
     int mNumberOfKeys;
     int mKeyNumberOfA4;
     std::vector<double> mdBA;           // vector holding dBA curve
+    
+    // V2 (1.3): 0 = auto (numberOfBassKeys du piano)
+    int mBreakKeyIndex = 0;
+
 
 };
 

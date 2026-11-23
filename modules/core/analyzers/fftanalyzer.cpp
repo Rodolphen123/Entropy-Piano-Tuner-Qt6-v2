@@ -529,26 +529,34 @@ double FFTAnalyzer::getExpectedInharmonicity (double f)
 //                      Estimate inharmonicity
 //-----------------------------------------------------------------------------
 
+//-----------------------------------------------------------------------------
+//                      Estimate inharmonicity
+//-----------------------------------------------------------------------------
+
 ///////////////////////////////////////////////////////////////////////////////
 /// \brief Estimate the inharmonicity B
 ///
-/// This function estimates the inharmonicity coefficient B on the basis of
-/// the recorded data. This estimate serves as a quality and consistency check.
+/// V2 (cahier des charges 1.3): estimation de B par touche avec
+///   - balayage grossier (conservé, pas de 3 % autour de B attendu),
+///   - optimisation fine (recherche par section dorée sur ln B),
+///   - pondération des partiels par leur SNR local (au lieu du poids égal).
 ///
-/// The function uses the frequency estimate that has been obtained before
-/// by determineFrequency. The frequency and inhamronicity is then optimized
-/// iteratively. This is achieved by minimizing the Renyi entropy of the
-/// collapsed peak according to the known inharmonicity formula.
+/// Le SNR d'un partiel est estimé comme le rapport entre le maximum local
+/// du spectre dans une fenêtre de +/- R/2 autour du partiel et la médiane
+/// du spectre dans la même fenêtre. Un partiel de SNR < 1 reçoit un poids
+/// quasi nul ; un partiel de SNR élevé reçoit un poids proche de 1.
+/// Le poids est w_n = SNR_n / (SNR_n + 1) (soft-threshold).
 ///
-/// \param spectrum : Logarithmically binned spectrum
-/// \param f : Previous frequency estimate
-/// \return Estimated inharmonicity coefficient B (dimensionless).
+/// \param fftData : FFT originale (non logarithmique)
+/// \param spectrum : Spectre binned logarithmiquement
+/// \param f : Estimation préalable de la fréquence fondamentale
+/// \return Coefficient d'inharmonicité B (sans dimension)
 ///////////////////////////////////////////////////////////////////////////////
 
-double FFTAnalyzer::estimateInharmonicity (FFTDataPointer fftData, SpectrumType &spectrum, double f)
+double FFTAnalyzer::estimateInharmonicity(FFTDataPointer fftData, SpectrumType& spectrum, double f)
 {
     // do not evaluate inharmonicity if parameters are invalid
-    if (spectrum.size()==0 or f<20) return 0;
+    if (spectrum.size() == 0 or f < 20) return 0;
 
     // do not evaluate inharmonicity in the very high treble (top octave)
     // because this is usually very unreliable
@@ -556,12 +564,12 @@ double FFTAnalyzer::estimateInharmonicity (FFTDataPointer fftData, SpectrumType 
 
     // for frequencies above 1kHz only f1 and f2 are taken into account
     // and the inharmonicity B is calculated directly from their ratio.
-    if (f>1000)
+    if (f > 1000)
     {
-        double f2 = findAccuratePeakFrequency (fftData, 2.0174*f, 15);
-        double z = f2*f2/f/f;
-        if (z>4.4 or z<4) return 0;
-        double B = (4-z)/(z-16);
+        double f2 = findAccuratePeakFrequency(fftData, 2.0174 * f, 15);
+        double z = f2 * f2 / f / f;
+        if (z > 4.4 or z < 4) return 0;
+        double B = (4 - z) / (z - 16);
         LogV("FFTAnalyzer: treble: B = %f", B);
         return B;
     }
@@ -570,8 +578,8 @@ double FFTAnalyzer::estimateInharmonicity (FFTDataPointer fftData, SpectrumType 
     // by superposition of N higher partials and searching for the lowest
     // Renyi entropy of the superposition.
 
-    // Define the number of partials taken into accout.
-    int N=MathTools::roundToInteger(4*(8-log(f)));
+    // Define the number of partials taken into account.
+    int N = MathTools::roundToInteger(4 * (8 - log(f)));
 
     double B = 0;               // Inharmonicity to be determined
     double Hmin = 1E100;        // Initial Renyi entropy very high
@@ -581,42 +589,186 @@ double FFTAnalyzer::estimateInharmonicity (FFTDataPointer fftData, SpectrumType 
     double expected_B = getExpectedInharmonicity(f);
     LogV("FFTAnalyzer: expected B = %f", expected_B);
 
-    mOptimalSuperposition.clear();
-    for (double scan_B = expected_B/5; scan_B <= expected_B*5; scan_B*=1.03)
-    {
-        SpectrumType superposition(R,0);
-        for (int n=1; n<=N; ++n)
+    // --------------------------------------------------------------------
+    // V2 (1.3): helper local qui construit la superposition pondérée par SNR
+    // pour un B donné. Retourne aussi l'entropie de Renyi et le nombre de
+    // partiels effectivement utilisés (poids > 0.05).
+    // --------------------------------------------------------------------
+    auto buildWeightedSuperposition =
+        [&spectrum, f, N, R](double scan_B, double& Hout, int& nUsed) -> SpectrumType
         {
-            double fn = n*f*sqrt((1+scan_B*n*n)/(1+scan_B));
-            double mn = Key::FrequencyToRealIndex(fn);
-            SpectrumType partialspectrum(R,0);
-            if (mn-R/2>0 and mn+R/2<NumberOfBins)
+            SpectrumType superposition(R, 0);
+            double totalWeight = 0.0;
+            nUsed = 0;
+
+            for (int n = 1; n <= N; ++n)
             {
-                for (int r=0; r<R; r++)
+                double fn = n * f * sqrt((1 + scan_B * n * n) / (1 + scan_B));
+                double mn = Key::FrequencyToRealIndex(fn);
+                if (mn - R / 2 <= 0 or mn + R / 2 >= Key::NumberOfBins) continue;
+
+                SpectrumType partialspectrum(R, 0);
+                for (int r = 0; r < R; ++r)
                 {
-                    int m = static_cast<int>(mn+r-R/2);
-                    EptAssert (m>=0 and m<NumberOfBins,"m invalid");
-                    partialspectrum[r]=pow(spectrum[m],2);
+                    int m = static_cast<int>(mn + r - R / 2);
+                    EptAssert(m >= 0 and m < Key::NumberOfBins, "m invalid");
+                    partialspectrum[r] = pow(spectrum[m], 2);
                 }
+
+                // SNR local : max / médiane (estimateur robuste du bruit).
+                double maxVal = 0.0;
+                for (double v : partialspectrum) if (v > maxVal) maxVal = v;
+                SpectrumType sorted = partialspectrum;
+                std::sort(sorted.begin(), sorted.end());
+                double median = sorted[sorted.size() / 2];
+                double snr = (median > 0.0) ? (maxVal / median) : 0.0;
+
+                double w = snr / (snr + 1.0);
+
                 MathTools::normalize(partialspectrum);
-                for (int r=0; r<R; r++) superposition[r]+=partialspectrum[r];
+                for (int r = 0; r < R; ++r) superposition[r] += w * partialspectrum[r];
+                totalWeight += w;
+                if (w > 0.05) nUsed++;
+            }
+
+            if (totalWeight <= 0.0)
+            {
+                Hout = 1E100;
+                return superposition;
+            }
+
+            MathTools::normalize(superposition);
+            Hout = MathTools::computeRenyiEntropy(superposition, 0.1);
+            return superposition;
+        };
+
+    // --------------------------------------------------------------------
+    // Étape 1 — balayage grossier (conservé, pas de 3 %)
+    // --------------------------------------------------------------------
+    // Ancien code (conservé pour référence) :
+    // mOptimalSuperposition.clear();
+    // for (double scan_B = expected_B/5; scan_B <= expected_B*5; scan_B*=1.03)
+    // {
+    //     SpectrumType superposition(R,0);
+    //     for (int n=1; n<=N; ++n)
+    //     {
+    //         double fn = n*f*sqrt((1+scan_B*n*n)/(1+scan_B));
+    //         double mn = Key::FrequencyToRealIndex(fn);
+    //         SpectrumType partialspectrum(R,0);
+    //         if (mn-R/2>0 and mn+R/2<NumberOfBins)
+    //         {
+    //             for (int r=0; r<R; r++)
+    //             {
+    //                 int m = static_cast<int>(mn+r-R/2);
+    //                 EptAssert (m>=0 and m<NumberOfBins,"m invalid");
+    //                 partialspectrum[r]=pow(spectrum[m],2);
+    //             }
+    //             MathTools::normalize(partialspectrum);
+    //             for (int r=0; r<R; r++) superposition[r]+=partialspectrum[r];
+    //         }
+    //     }
+    //
+    //     MathTools::normalize(superposition);
+    //     double H = MathTools::computeRenyiEntropy(superposition,0.1);
+    //     if (fabs(H)<Hmin)
+    //     {
+    //         Hmin=H;
+    //         B=scan_B;
+    //         mOptimalSuperposition = superposition;
+    //         Write("7-find-inharmonicity.dat",superposition);
+    //     }
+    // }
+
+    double Bcoarse = expected_B;
+    double Hcoarse = 1E100;
+    SpectrumType bestSuperposition;
+    int bestNUsed = 0;
+
+    for (double scan_B = expected_B / 5; scan_B <= expected_B * 5; scan_B *= 1.03)
+    {
+        double H = 1E100;
+        int nUsed = 0;
+        SpectrumType sup = buildWeightedSuperposition(scan_B, H, nUsed);
+        if (H < Hcoarse)
+        {
+            Hcoarse = H;
+            Bcoarse = scan_B;
+            bestSuperposition = std::move(sup);
+            bestNUsed = nUsed;
+        }
+    }
+
+    LogV("FFTAnalyzer: coarse B = %f (H = %f, nUsed = %d)", Bcoarse, Hcoarse, bestNUsed);
+
+    // --------------------------------------------------------------------
+    // Étape 2 — optimisation fine (section dorée sur ln B)
+    // --------------------------------------------------------------------
+    // Ancien code (pas d'étape fine dans la version d'origine) :
+    // LogV("FFTAnalyzer: finished estimating inharmonicity: B = %f", B);
+    // return B;
+
+    const double invPhi = 0.6180339887498949;  // 1/phi
+    double xLo = std::log(Bcoarse / 1.03);
+    double xHi = std::log(Bcoarse * 1.03);
+    if (!(xHi > xLo))
+    {
+        B = Bcoarse;
+        mOptimalSuperposition = std::move(bestSuperposition);
+    }
+    else
+    {
+        double x1 = xHi - invPhi * (xHi - xLo);
+        double x2 = xLo + invPhi * (xHi - xLo);
+        auto eval = [&](double x, double& H, int& nUsed) -> SpectrumType
+            {
+                return buildWeightedSuperposition(std::exp(x), H, nUsed);
+            };
+
+        double H1 = 1E100, H2 = 1E100;
+        int n1 = 0, n2 = 0;
+        SpectrumType s1 = eval(x1, H1, n1);
+        SpectrumType s2 = eval(x2, H2, n2);
+
+        const int maxIter = 24;
+        const double tol = 1E-4;
+        for (int it = 0; it < maxIter and (xHi - xLo) > tol; ++it)
+        {
+            if (H1 < H2)
+            {
+                xHi = x2;
+                x2 = x1; H2 = H1; n2 = n1; s2 = std::move(s1);
+                x1 = xHi - invPhi * (xHi - xLo);
+                s1 = eval(x1, H1, n1);
+            }
+            else
+            {
+                xLo = x1;
+                x1 = x2; H1 = H2; n1 = n2; s1 = std::move(s2);
+                x2 = xLo + invPhi * (xHi - xLo);
+                s2 = eval(x2, H2, n2);
             }
         }
 
-        MathTools::normalize(superposition);
-        double H = MathTools::computeRenyiEntropy(superposition,0.1);
-        if (fabs(H)<Hmin)
+        if (H1 < H2)
         {
-            Hmin=H;
-            B=scan_B;
-            mOptimalSuperposition = superposition;
-            Write("7-find-inharmonicity.dat",superposition);
+            B = std::exp(x1);
+            mOptimalSuperposition = std::move(s1);
+            bestNUsed = n1;
+            Hmin = H1;
+        }
+        else
+        {
+            B = std::exp(x2);
+            mOptimalSuperposition = std::move(s2);
+            bestNUsed = n2;
+            Hmin = H2;
         }
     }
-    LogV("FFTAnalyzer: finished estimating inharmonicity: B = %f", B);
+
+    LogV("FFTAnalyzer: fine B = %f (H = %f, nUsed = %d)", B, Hmin, bestNUsed);
 
 #if CONFIG_ENABLE_XMGRACE
-    //system("killall -9 xmgrace; xmgrace -maxpath 200000  -fixed 570 440 -geometry 800x660 7-find-inharmonicity.dat &");
+    Write("7-find-inharmonicity.dat", mOptimalSuperposition);
 #endif  // CONFIG_ENABLE_XMGRACE
 
     return B;

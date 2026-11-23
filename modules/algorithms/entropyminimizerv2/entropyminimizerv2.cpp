@@ -178,6 +178,16 @@ bool EntropyMinimizer::performAuditoryPreprocessing()
     LogI("EntropyMinimizerV2: start auditory preprocessing");
     AuditoryPreprocessing AP(mPiano);
 
+    // V2 (cahier des charges 1.3): transmission de breakKeyIndex depuis les
+    // paramètres de l'algorithme vers le prétraitement. 0 = auto, c'est-à-dire
+    // utiliser numberOfBassKeys du piano (comportement par défaut).
+    if (mParameters and mParameters->hasIntParameter("breakKeyIndex"))
+    {
+        const int bk = mParameters->getIntParameter("breakKeyIndex");
+        LogD("EntropyMinimizerV2: breakKeyIndex from XML = %d (0 = auto)", bk);
+        AP.setBreakKeyIndex(bk);
+    }
+
     if (not AP.checkDataConsistency()) return false;
 
     LogI("EntropyMinimzer: Normalize spectra ");
@@ -215,6 +225,10 @@ bool EntropyMinimizer::performAuditoryPreprocessing()
     }
 
     LogI("EntropyMinimizerV2: Extrapolate missing inharmonicity values");
+    // V2 (1.3): log de la valeur effective de breakKeyIndex (auto ou surchargée)
+    LogD("EntropyMinimizerV2: effective breakKeyIndex = %d (0 = auto -> numberOfBassKeys)",
+        mParameters and mParameters->hasIntParameter("breakKeyIndex")
+        ? mParameters->getIntParameter("breakKeyIndex") : 0);
     AP.extrapolateInharmonicity();
     if (cancelThread()) return false;
 
