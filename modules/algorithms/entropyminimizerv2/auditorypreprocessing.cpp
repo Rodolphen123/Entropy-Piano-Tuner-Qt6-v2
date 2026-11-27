@@ -21,6 +21,9 @@
 //                           Auditory preprocessing
 //=============================================================================
 
+// mode debug
+//#define DEBUG_EXTRAPOLATE_INHARMONICITY
+
 #include "auditorypreprocessing.h"
 
 #include <iostream>
@@ -369,26 +372,101 @@ namespace {
 } // namespace
 
 //-----------------------------------------------------------------------------
+//          V2 (1.3) : helpers membres (détection rupture + fit segment)
+//-----------------------------------------------------------------------------
+
+///////////////////////////////////////////////////////////////////////////////
+/// \brief Détection de la rupture (plus grand saut de ln B).
+///
+/// On cherche, dans la fenêtre [12 .. keyNumberOfA4 - 8], la paire de
+/// touches consécutives (k, k+1) qui maximise |ln B[k+1] - ln B[k]|,
+/// en ne considérant que les B > 0. Retourne k (la rupture est entre k
+/// et k+1). Si aucun saut valide n'est trouvé (moins de deux B > 0 dans
+/// la fenêtre), retourne numberOfBassKeys (repli).
+///////////////////////////////////////////////////////////////////////////////
+int AuditoryPreprocessing::detectBreakKey(int numberOfBassKeys, int keyNumberOfA4)
+{
+    int searchStart = 12;
+    int searchEnd   = keyNumberOfA4 - 8;
+    if (searchEnd <= searchStart) searchEnd = searchStart + 1;
+    if (searchEnd > mNumberOfKeys - 1) searchEnd = mNumberOfKeys - 1;
+
+    int    bestKey  = numberOfBassKeys; // repli par défaut
+    double bestJump = -1.0;
+
+    for (int k = searchStart; k < searchEnd && k + 1 < mNumberOfKeys; ++k)
+    {
+        const double b0 = mKeys[k].getMeasuredInharmonicity();
+        const double b1 = mKeys[k + 1].getMeasuredInharmonicity();
+        if (!(b0 > 0.0) or !(b1 > 0.0)) continue; // ignorer les B manquants
+
+        const double jump = std::fabs(std::log(b1) - std::log(b0));
+        if (jump > bestJump)
+        {
+            bestJump = jump;
+            bestKey  = k + 1; // première touche du segment suivant
+        }
+    }
+
+    // V2 (1.3): si le saut maximal est trop faible, la détection n'est pas
+    // fiable (bruit de mesure). On revient au repli numberOfBassKeys.
+    // Seuil 0.6 : calé sur les 4 pianos de référence (Pleyel 1.55,
+    // Erard 129257 1.38, Gaveau 0.99, Erard cordes // 0.50).
+    if (bestJump < 0.6 && bestJump >= 0.0)
+    {
+        LogW("detectBreakKey: bestJump=%.3f trop faible, repli sur numberOfBassKeys=%d",
+            bestJump, numberOfBassKeys);
+        bestKey = numberOfBassKeys;
+    }
+
+    LogI("detectBreakKey: bestJump=%f at k=%d (repli numberOfBassKeys=%d)",
+         bestJump, bestKey, numberOfBassKeys);
+    return bestKey;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+/// \brief Ajustement Theil-Sen de y = a*x + b sur un segment.
+/// Retourne false si moins de 6 points valides.
+///////////////////////////////////////////////////////////////////////////////
+bool AuditoryPreprocessing::theilSenFitSegment(const std::vector<double>& xs,
+                                               const std::vector<double>& ys,
+                                               double& a, double& b)
+{
+    if (xs.size() < 6 || xs.size() != ys.size())
+    {
+        a = 0.0; b = 0.0;
+        return false;
+    }
+    theilSenFit(xs, ys, a, b);
+    return true;
+}
+
+//-----------------------------------------------------------------------------
 //               extrapolate missing inharmonicity estimates
 //-----------------------------------------------------------------------------
 
 ///////////////////////////////////////////////////////////////////////////////
 /// \brief Extrapolate inharmonicity and estimate missing values
 ///
-/// V2 (cahier des charges 1.3) : ajustement robuste de ln B en DEUX segments
-///   - segment 1 : cordes filées, touches [0 .. breakKeyIndex-1]
-///   - segment 2 : cordes nues,   touches [breakKeyIndex .. N-1]
+/// V2 (cahier des charges 1.3) :
+///   - Politique 1 (défaut) : CONSERVER B mesuré, sauf B <= 0.
+///     Les B <= 0 (touches > 2250 Hz, où estimateInharmonicity retourne 0
+///     volontairement) sont remplis par :
+///       * Theil-Sen sur le segment "cordes nues" à partir de
+///         (rupture + 8), si au moins 6 points valides ;
+///       * sinon getExpectedInharmonicity(f1).
+///   - Politique 0 (ancien comportement) : REMPLACER tous les B par
+///     l'ajustement robuste Theil-Sen en deux segments
+///     [0 .. breakKeyIndex-1] et [breakKeyIndex .. N-1].
 ///
-/// Chaque segment est ajusté par Theil-Sen (médiane des pentes), robuste
-/// aux outliers — c'est exactement le problème observé sur l'Erard 1951
-/// (B bruité dans les graves/médiums).
+/// La rupture est détectée dans les données (plus grand saut de ln B,
+/// fenêtre 12 .. A4-8) ; repli sur numberOfBassKeys si non trouvée.
+/// breakKeyIndex (XML) surcharge la détection : si > 0, on l'utilise
+/// directement comme point de rupture.
 ///
-/// Repli : si un segment a moins de 6 valeurs valides (B > 0), on utilise
-/// getExpectedInharmonicity(f1) pour toutes les touches de ce segment.
-///
-/// Les anciennes valeurs sont conservées en commentaire pour référence.
+/// Journalisation : les B quasi nuls (conservés) et les B au plafond
+/// de la grille sont signalés dans le log.
 ///////////////////////////////////////////////////////////////////////////////
-
 void AuditoryPreprocessing::extrapolateInharmonicity()
 {
     // Ancien code (conservé pour référence) :
@@ -422,18 +500,40 @@ void AuditoryPreprocessing::extrapolateInharmonicity()
     // }
 
     // --------------------------------------------------------------------
-    // Résolution de breakKeyIndex (cahier des charges 1.3) :
-    //   - surcharge via le paramètre XML "breakKeyIndex" (setBreakKeyIndex),
-    //   - 0 ou valeur <= 0 = utiliser numberOfBassKeys du piano (défaut),
-    //   - bornage dans [0, mNumberOfKeys].
+    // Étape 0 : déterminer la rupture.
+    //   - si mBreakKeyIndex > 0 : surcharge XML, on l'utilise tel quel ;
+    //   - sinon : détection dans les données (plus grand saut de ln B),
+    //             repli sur numberOfBassKeys.
     // --------------------------------------------------------------------
-    int breakKeyIndex = (mBreakKeyIndex > 0) ? mBreakKeyIndex
-        : mKeyboard.getNumberOfBassKeys();
+    
+#ifdef DEBUG_EXTRAPOLATE_INHARMONICITY
+    std::ofstream os("0-original-inharmonicity.dat");
+    for (int k = 0; k < mNumberOfKeys; ++k)
+        os << k << " " << mKeys[k].getMeasuredInharmonicity() << std::endl;
+#endif
+
+    
+    const int numberOfBassKeys = mKeyboard.getNumberOfBassKeys();
+    int breakKeyIndex;
+    if (mBreakKeyIndex > 0)
+    {
+        breakKeyIndex = mBreakKeyIndex;
+        LogI("extrapolateInharmonicity: breakKeyIndex=%d (surcharge XML)",
+             breakKeyIndex);
+    }
+    else
+    {
+        breakKeyIndex = detectBreakKey(numberOfBassKeys, mKeyNumberOfA4);
+        LogI("extrapolateInharmonicity: breakKeyIndex=%d (détecté, repli=%d)",
+             breakKeyIndex, numberOfBassKeys);
+    }
     if (breakKeyIndex < 0) breakKeyIndex = 0;
     if (breakKeyIndex > mNumberOfKeys) breakKeyIndex = mNumberOfKeys;
 
     // --------------------------------------------------------------------
-    // Étape 1 : collecter les points valides (k, ln B) par segment
+    // Étape 1 : collecter les points valides (k, ln B) par segment.
+    // Le segment 1 = cordes filées [0 .. breakKeyIndex-1].
+    // Le segment 2 = cordes nues   [breakKeyIndex .. N-1].
     // --------------------------------------------------------------------
     auto collectSegment = [this](int kBegin, int kEnd,
         std::vector<double>& xs,
@@ -451,35 +551,173 @@ void AuditoryPreprocessing::extrapolateInharmonicity()
         };
 
     std::vector<double> x1, y1, x2, y2;
-    collectSegment(0, breakKeyIndex, x1, y1);  // cordes filées
+    collectSegment(0, breakKeyIndex, x1, y1);              // cordes filées
     collectSegment(breakKeyIndex, mNumberOfKeys, x2, y2);  // cordes nues
 
-    LogD("extrapolateInharmonicity: breakKeyIndex=%d, "
-        "segment1=%d points, segment2=%d points",
-        breakKeyIndex, static_cast<int>(x1.size()), static_cast<int>(x2.size()));
+    LogI("extrapolateInharmonicity: breakKeyIndex=%d, "
+         "segment1=%d pts, segment2=%d pts, policy=%d",
+         breakKeyIndex, static_cast<int>(x1.size()),
+         static_cast<int>(x2.size()), mInharmonicityPolicy);
 
     // --------------------------------------------------------------------
-    // Étape 2 : ajuster chaque segment, ou marquer comme "non ajustable"
+    // Étape 2 : ajuster chaque segment.
+    // Pour la politique 1, seul le segment 2 sert (à partir de rupture+8).
+    // Pour la politique 0, les deux segments servent (comportement V2.5).
     // --------------------------------------------------------------------
-    const int minPointsForFit = 6;
     double a1 = 0.0, b1 = 0.0, a2 = 0.0, b2 = 0.0;
-    const bool fit1 = (static_cast<int>(x1.size()) >= minPointsForFit);
-    const bool fit2 = (static_cast<int>(x2.size()) >= minPointsForFit);
+    bool fit1 = false, fit2 = false;
 
-    if (fit1) theilSenFit(x1, y1, a1, b1);
-    if (fit2) theilSenFit(x2, y2, a2, b2);
+    if (mInharmonicityPolicy == 0)
+    {
+        // Politique 0 : deux segments complets (ancien comportement V2.5).
+        fit1 = theilSenFitSegment(x1, y1, a1, b1);
+        fit2 = theilSenFitSegment(x2, y2, a2, b2);
+    }
+    else
+    {
+        // Politique 1 : Theil-Sen sur le segment "cordes nues" uniquement,
+          // à partir de rupture + 8 (marge). On ne touche pas aux basses.
+        const int startFit = std::min(breakKeyIndex + 8, mNumberOfKeys);
+        std::vector<double> xs, ys;
+        collectSegment(startFit, mNumberOfKeys, xs, ys);
+        fit2 = theilSenFitSegment(xs, ys, a2, b2);
+
+        // V2 (1.3) : fit1 aussi, pour la détection d'outliers sur les graves.
+        // Non utilisé pour le remplissage des B <= 0 en politique 1, mais
+        // nécessaire pour comparer les B mesurés des cordes filées à leur
+        // propre tendance (sinon fit2, extrapolé depuis les nues, détecte
+        // à tort toutes les touches filées comme outliers).
+        fit1 = theilSenFitSegment(x1, y1, a1, b1);
+
+        LogI("extrapolateInharmonicity: policy=1, startFit=%d, "
+            "fitPoints=%d, fitValid=%d, fit1Valid=%d",
+            startFit, static_cast<int>(xs.size()),
+            static_cast<int>(fit2), static_cast<int>(fit1));
+    }
 
     // --------------------------------------------------------------------
-    // Étape 3 : appliquer l'ajustement (ou le repli) sur TOUTES les touches.
-    //
-    // Note : on écrase aussi les valeurs valides du segment, pour que la
-    // courbe soit lisse — c'est le comportement voulu par le cahier des
-    // charges ("ajustement robuste ... en deux segments"). Si tu préfères
-    // ne remplacer que les valeurs manquantes/aberrantes, il suffit de
-    // tester B > 0 avant d'écraser (voir plus bas).
-    // --------------------------------------------------------------------
+// Étape 3 : appliquer la politique.
+// --------------------------------------------------------------------
+// Constantes de journalisation.
+    const double NEAR_ZERO_B = 1e-8;      // seuil "quasi nul"
+    // Facteur de détection des outliers (décision 1.3) : un B mesuré
+    // est considéré comme atypique s'il sort de [fit/seuil ; seuil*fit].
+    // Le seuil est élargi autour de la rupture (bonus décroissant) pour
+    // ne pas détecter à tort les touches de transition filées -> nues.
+    const double OUTLIER_FACTOR_BASE = 2.0;   // seuil de base (loin de la rupture)
+    const double OUTLIER_BREAK_BONUS = 1.5;   // bonus maximal à la rupture
+
+    int nKept = 0, nReplaced = 0, nFallback = 0, nOutliers = 0;
+
     for (int k = 0; k < mNumberOfKeys; ++k)
     {
+        const double B = mKeys[k].getMeasuredInharmonicity();
+
+        // Journalisation (politique 1 uniquement, sinon bruit inutile).
+        if (mInharmonicityPolicy == 1)
+        {
+            if (B > 0.0 && B < NEAR_ZERO_B)
+                LogW("Key %d : B quasi nul (%.3e) conservé", k, B);
+            const double f1_ = mPiano.getEqualTempFrequency(k, 0, 440);
+            const double gridCeil = 5.0 * mPiano.getExpectedInharmonicity(f1_);
+            if (B > 0.0 && B >= gridCeil * 0.999)
+                LogW("Key %d : B au plafond de la grille (%.3e, plafond=%.3e) conservé", k, B, gridCeil);
+        }
+
+        // -----------------------------------------------------------------
+        // Politique 1 (keep) : conserver B sauf outlier ou B <= 0.
+        // Ordre B : on traite les B > 0 atypiques ET les B <= 0 de la même
+        // façon (remplacement par le fit). Les B remplis par le fit ne
+        // peuvent pas être détectés comme outliers (ils sont dans
+        // [fit/2 ; 2*fit] par construction).
+        // -----------------------------------------------------------------
+        if (mInharmonicityPolicy == 1)
+        {
+            // Valeur de remplacement : fit sur cordes nues si valide,
+            // sinon getExpectedInharmonicity.
+            auto replacementValue = [&]() -> double
+                {
+                    const bool inSeg1 = (k < breakKeyIndex);
+                    const bool haveFit = inSeg1 ? fit1 : fit2;
+
+                    double BE = 0.0;
+
+                    if (haveFit)
+                    {
+                        const double aFit = inSeg1 ? a1 : a2;
+                        const double bFit = inSeg1 ? b1 : b2;
+                        BE = std::exp(aFit * static_cast<double>(k) + bFit);
+                    }
+
+                    if (!(BE > 0.0) || BE > 0.5)
+                    {
+                        const double f1_ = mPiano.getEqualTempFrequency(k, 0, 440);
+                        BE = mPiano.getExpectedInharmonicity(f1_);
+                    }
+
+                    return BE;
+                };
+
+            // Cas 1 : B <= 0 (manquant) -> remplacer.
+            if (!(B > 0.0))
+            {
+                const double BE = replacementValue();
+                mKeys[k].setMeasuredInharmonicity(BE);
+                ++nReplaced;
+                LogI("Key %d : B manquant (%.3e) remplacé par %.3e", k, B, BE);
+                continue;
+            }
+
+            // Cas 2 : B > 0 -> vérifier s'il est atypique.
+            // On utilise le fit du segment auquel appartient la touche :
+            // fit1 pour les cordes filées (< breakKeyIndex),
+            // fit2 pour les cordes nues   (>= breakKeyIndex).
+            const bool inSeg1 = (k < breakKeyIndex);
+            const bool haveFit = inSeg1 ? fit1 : fit2;
+            const double aFit = inSeg1 ? a1 : a2;
+            const double bFit = inSeg1 ? b1 : b2;
+
+            // Au-dessus de 2250 Hz, les B mesurés ne sont pas fiables.
+            // On les remplace systématiquement par l'extrapolation.
+            const double f1_ = mPiano.getEqualTempFrequency(k, 0, 440);
+
+            if (f1_ > 2250.0)
+            {
+                const double BE = replacementValue();
+                mKeys[k].setMeasuredInharmonicity(BE);
+                ++nOutliers;
+
+                LogI("Key %d : B mesuré non fiable (f=%.1f Hz, B=%.3e) remplacé par %.3e",
+                    k, f1_, B, BE);
+                continue;
+            }
+
+            if (haveFit)
+            {
+                const double fitted = std::exp(aFit * static_cast<double>(k) + bFit);
+                const double dynamicThreshold = (k >= breakKeyIndex)
+                    ? OUTLIER_FACTOR_BASE + OUTLIER_BREAK_BONUS / static_cast<double>(k - breakKeyIndex + 1)
+                    : OUTLIER_FACTOR_BASE;
+
+                if (fitted > 0.0 && (B < fitted / dynamicThreshold || B > fitted * dynamicThreshold))
+                {
+                    mKeys[k].setMeasuredInharmonicity(fitted);
+                    ++nOutliers;
+                    LogI("Key %d : B outlier (B=%.3e, fitted=%.3e) remplacé par %.3e",
+                        k, B, fitted, fitted);
+                    continue;
+                }
+            }
+
+            // B > 0 et dans l'intervalle [fit/2 ; 2*fit] -> conserver.
+            ++nKept;
+            continue;
+        }
+
+        // -----------------------------------------------------------------
+        // Politique 0 (replace) : ancien comportement, remplacement
+        // systématique par le fit (deux segments).
+        // -----------------------------------------------------------------
         const bool inSegment1 = (k < breakKeyIndex);
         const bool haveFit = inSegment1 ? fit1 : fit2;
 
@@ -492,41 +730,65 @@ void AuditoryPreprocessing::extrapolateInharmonicity()
         }
         else
         {
-            // Repli : moins de 6 valeurs valides dans ce segment.
-            const double f1 = mPiano.getEqualTempFrequency(k, 0, 440);
-            BE = mPiano.getExpectedInharmonicity(f1);
+            const double f1_ = mPiano.getEqualTempFrequency(k, 0, 440);
+            BE = mPiano.getExpectedInharmonicity(f1_);
         }
 
-        // Garde-fou : B doit rester dans une plage physique plausible.
         if (!(BE > 0.0) or BE > 0.5)
         {
-            const double f1 = mPiano.getEqualTempFrequency(k, 0, 440);
-            BE = mPiano.getExpectedInharmonicity(f1);
+            const double f1_ = mPiano.getEqualTempFrequency(k, 0, 440);
+            BE = mPiano.getExpectedInharmonicity(f1_);
         }
-
         mKeys[k].setMeasuredInharmonicity(BE);
     }
 
-    #ifdef DEBUG_EXTRAPOLATE_INHARMONICITY
-    // V2 (1.3) debug: logs de diagnostic pour validation hors-ligne.
-    LogI("extrapolateInharmonicity: mBreakKeyIndex=%d, numberOfBassKeys=%d, breakKeyIndex=%d",
-        mBreakKeyIndex, mKeyboard.getNumberOfBassKeys(), breakKeyIndex);
-    LogI("extrapolateInharmonicity: seg1=%d pts, seg2=%d pts",
-        static_cast<int>(x1.size()), static_cast<int>(x2.size()));
-    if (fit1) LogI("extrapolateInharmonicity: seg1 Theil-Sen a=%f b=%f", a1, b1);
-    if (fit2) LogI("extrapolateInharmonicity: seg2 Theil-Sen a=%f b=%f", a2, b2);
-    LogI("extrapolateInharmonicity: k=0 B=%f, k=16 B=%f, k=28 B=%f, k=84 B=%f",
-        mKeys[0].getMeasuredInharmonicity(),
-        mKeys[16].getMeasuredInharmonicity(),
-        mKeys[28].getMeasuredInharmonicity(),
-        mKeys[84].getMeasuredInharmonicity());
+    LogI("extrapolateInharmonicity: policy=%d, kept=%d, replaced=%d, outliers=%d, fallback=%d",
+        mInharmonicityPolicy, nKept, nReplaced, nOutliers, nFallback);
 
+    LogI("extrapolateInharmonicity: fit1=%d (a1=%f b1=%f), fit2=%d (a2=%f b2=%f)",
+         static_cast<int>(fit1), a1, b1, static_cast<int>(fit2), a2, b2);
+
+    // ------------------------------------------------------------------------
+    // V2 (1.3) : B LISSE pour la courbe d'accord initiale.
+    // ComputeInitialTuningCurve() propage B d'octave en octave
+    // (touche k-12 -> touche k) : une irregularite de B y est repetee et
+    // amplifiee vers l'aigu. Conserver les mesures (politique 1) rend donc la
+    // courbe initiale irreguliere, alors qu'elle sert de reference et d'ancrage
+    // a la tolerance. Pour la courbe SEULEMENT, les B du segment ajuste qui
+    // s'ecartent de plus de 0.2 (en ln, soit environ 22 %) de la droite sont
+    // ramenes sur la droite, comme le faisait l'ancien moteur avec son rejet a
+    // 20 %. Les B des touches (nettoyage, pics synthetiques) ne sont pas modifies.
+    // ------------------------------------------------------------------------
+    mSmoothedInharmonicity.assign(mNumberOfKeys, 0.0);
+    for (int k = 0; k < mNumberOfKeys; ++k)
+        mSmoothedInharmonicity[k] = mKeys[k].getMeasuredInharmonicity();
+
+    if (mInharmonicityPolicy == 1 and fit2)
+    {
+        const int smoothStart = std::min(breakKeyIndex + 8, mNumberOfKeys);
+        int nSmoothed = 0;
+        for (int k = smoothStart; k < mNumberOfKeys; ++k)
+        {
+            const double line = std::exp(a2 * static_cast<double>(k) + b2);
+            const double Bk = mSmoothedInharmonicity[k];
+            if (line > 0.0 and line <= 0.5 and Bk > 0.0
+                and std::fabs(std::log(Bk / line)) > 0.2)
+            {
+                mSmoothedInharmonicity[k] = line;
+                ++nSmoothed;
+            }
+        }
+        LogI("extrapolateInharmonicity: B lisse pour la courbe initiale : %d touche(s) ramenee(s) sur la droite",
+             nSmoothed);
+    }
+
+#ifdef DEBUG_EXTRAPOLATE_INHARMONICITY
     {
         std::ofstream os("0-extrapolated-inharmonicity.dat");
         for (int k = 0; k < mNumberOfKeys; ++k)
             os << k << " " << mKeys[k].getMeasuredInharmonicity() << std::endl;
     }
-    #endif // DEBUG_EXTRAPOLATE_INHARMONICITY
+#endif // DEBUG_EXTRAPOLATE_INHARMONICITY
 
 }
 
@@ -541,30 +803,145 @@ void AuditoryPreprocessing::extrapolateInharmonicity()
 /// are sometimes very weak.
 ///////////////////////////////////////////////////////////////////////////////
 
-void AuditoryPreprocessing::improveHighFrequencyPeaks ()
+//-----------------------------------------------------------------------------
+//          V2 (1.4) : helper du mode "complement"
+//-----------------------------------------------------------------------------
+
+///////////////////////////////////////////////////////////////////////////////
+/// \brief Renforce les raies hautes frequences sans ecraser le mesure.
+///
+/// Ne touche que les bins dont la frequence est >= mHighFrequencyCutoffHz
+/// (5000 Hz par defaut, conformement au cahier des charges 1.4).
+/// Pour chaque partiel n = 2..6, on calcule la position theorique mn et on
+/// applique spectrum[i] = max(spectrum[i], synthetique) sur la fenetre
+/// gaussienne [mn-10, mn+10]. Le fondamental n'est jamais annule (on ne
+/// fait rien a i = m, et on ne met jamais 0). L'intensite de reference est
+/// spectrum[m] (fondamental mesure), sans le facteur 0->1 du legacy.
+///
+/// \param key    : touche a traiter
+/// \param touched: (sortie) nombre de bins effectivement renforces
+/// \param maxGain: (sortie) gain maximal (synth - mesure) sur les bins touches
+///////////////////////////////////////////////////////////////////////////////
+void AuditoryPreprocessing::applyHighFrequencyComplement(Key& key,
+    int& touched,
+    double& maxGain)
 {
-    int start = mKeyNumberOfA4;
-    for (int k = start; k < mNumberOfKeys; k++)
+    touched = 0;
+    maxGain = 0.0;
+
+    SpectrumType& spectrum = key.getSpectrum();
+    const double f = key.getRecordedFrequency();
+    const double B = key.getMeasuredInharmonicity();
+    if (f <= 0 or B <= 0) return;
+
+    const int m = MathTools::roundToInteger(ftom(f));
+    if (m < 0 or m >= static_cast<int>(NumberOfBins)) return;
+
+    const double intensity = spectrum[m];   // fondamental mesure, PAS de facteur 0->1
+    if (!(intensity > 0.0)) return;
+
+    // Frequence de coupure du CDC 1.4 (5 kHz). Constante locale : elle ne
+    // depend pas du piano, elle est physiquement motivee (limite des micros).
+    const double cutoffHz = 5000.0;
+
+    for (int n = 2; n <= 6; ++n)
     {
-        Key &key = mKeys[k];
-        SpectrumType &spectrum = key.getSpectrum();
-        double f = key.getRecordedFrequency();
-        double B = key.getMeasuredInharmonicity();
-        if (f<=0 or B<=0) continue;
-        int m = MathTools::roundToInteger(ftom(f));
-        if (m<0 or m>static_cast<int>(NumberOfBins)) continue;
-        double factor = (1.0*(k-start))/(mNumberOfKeys-start);
-        double intensity = spectrum[m] * factor;
-        for (int n=2; n<=6; ++n)
+        const double fn = getInharmonicPartial(n, f, B);
+        if (fn < 20.0 or fn > 10000.0) continue;
+        const int mn = MathTools::roundToInteger(ftom(fn));
+
+        const double profile = intensity * pow(4.0, -n);   // amplitude au sommet
+        for (int i = mn - 10; i <= mn + 10; ++i)
         {
-            double fn = getInharmonicPartial(n,f,B);
-            if (fn<20 or fn>10000) continue;
-            int mn = MathTools::roundToInteger(ftom(fn));
-            for (int i=mn-10; i<=mn+10; ++i)
-                if (i>=0 and i < static_cast<int>(NumberOfBins))
-                    spectrum[i] = intensity * pow(4,-n) * exp(-0.1*(i-mn)*(i-mn));
+            if (i < 0 or i >= static_cast<int>(NumberOfBins)) continue;
+            if (mtof(i) < cutoffHz) continue;               // CDC : au-dessus de 5 kHz seulement
+
+            const double synthetique = profile * exp(-0.1 * (i - mn) * (i - mn));
+            if (synthetique > spectrum[i])
+            {
+                const double gain = synthetique - spectrum[i];
+                if (gain > maxGain) maxGain = gain;
+                spectrum[i] = synthetique;
+                ++touched;
+            }
         }
     }
+}
+
+
+//-----------------------------------------------------------------------------
+//                  Improve high-frequency spectral lines
+//-----------------------------------------------------------------------------
+
+///////////////////////////////////////////////////////////////////////////////
+/// \brief Improve high-frequency spectral lines
+///
+/// V2 (cahier des charges 1.4) : trois modes, choisis par le XML
+/// (highFrequencyPeaksPolicy) :
+///   0 = legacy : ecrasement par le modele synthetique (comportement actuel).
+///       ATTENTION : le facteur vaut 0 a A4, donc les partiels 2..6 de A4
+///       sont mis a 0 (bug C6). A n'utiliser que pour comparer.
+///   1 = off    : ne rien faire.
+///   2 = complement : max(mesure, synthetique) uniquement au-dessus de
+///       5 kHz, sans ecraser le mesure ni annuler A4. Comportement V2.
+///
+/// La journalisation indique, pour le mode complement, le nombre de bins
+/// renforces et le gain max, par touche. Pour les autres modes, un simple
+/// rappel de la politique suffit.
+///////////////////////////////////////////////////////////////////////////////
+
+void AuditoryPreprocessing::improveHighFrequencyPeaks()
+{
+    LogI("improveHighFrequencyPeaks: policy=%d (0=legacy, 1=off, 2=complement)",
+        mHighFrequencyPeaksPolicy);
+
+    if (mHighFrequencyPeaksPolicy == 1) return;   // off
+
+    const int start = mKeyNumberOfA4;
+
+    if (mHighFrequencyPeaksPolicy == 2)
+    {
+        // Mode complement : max(mesure, synthetique) au-dessus de 5 kHz.
+        int totalTouched = 0;
+        int keyCount = 0;
+        double maxGain = 0.0;
+        for (int k = start; k < mNumberOfKeys; ++k)
+        {
+            int touched = 0;
+            double gain = 0.0;
+            applyHighFrequencyComplement(mKeys[k], touched, gain);
+            if (touched > 0) { ++keyCount; totalTouched += touched; }
+            if (gain > maxGain) maxGain = gain;
+        }
+        LogI("improveHighFrequencyPeaks: mode=complement, keys_touched=%d, "
+            "bins_touched=%d, maxGain=%.3e",
+            keyCount, totalTouched, maxGain);
+        return;
+    }
+
+    // Mode legacy : ecrasement (comportement actuel, C6 non corrige).
+    for (int k = start; k < mNumberOfKeys; k++)
+    {
+        Key& key = mKeys[k];
+        SpectrumType& spectrum = key.getSpectrum();
+        double f = key.getRecordedFrequency();
+        double B = key.getMeasuredInharmonicity();
+        if (f <= 0 or B <= 0) continue;
+        int m = MathTools::roundToInteger(ftom(f));
+        if (m<0 or m>static_cast<int>(NumberOfBins)) continue;
+        double factor = (1.0 * (k - start)) / (mNumberOfKeys - start);
+        double intensity = spectrum[m] * factor;
+        for (int n = 2; n <= 6; ++n)
+        {
+            double fn = getInharmonicPartial(n, f, B);
+            if (fn < 20 or fn>10000) continue;
+            int mn = MathTools::roundToInteger(ftom(fn));
+            for (int i = mn - 10; i <= mn + 10; ++i)
+                if (i >= 0 and i < static_cast<int>(NumberOfBins))
+                    spectrum[i] = intensity * pow(4, -n) * exp(-0.1 * (i - mn) * (i - mn));
+        }
+    }
+    LogI("improveHighFrequencyPeaks: mode=legacy (ecrasement, C6)");
 }
 
 
@@ -606,6 +983,35 @@ void AuditoryPreprocessing::applyMollifier(Key& key, double scale, double maxBas
     }
 }
 
+//-----------------------------------------------------------------------------
+//          V2 (1.5): signature du cache spectrumcalculate
+//-----------------------------------------------------------------------------
+
+std::string AuditoryPreprocessing::computeSpectrumCalculateSignature(int k) const
+{
+    // Signature basée sur :
+    //   - spectrum (hash des valeurs)
+    //   - recordedFrequency
+    //   - measuredInharmonicity
+    //   - version du prétraitement
+    // On utilise un hash simple (std::hash) pour éviter d'inclure
+    // <openssl> ou autre. Ce n'est pas cryptographique, mais suffisant
+    // pour détecter un changement.
+    const Key& key = mKeys[k];
+    const Key::SpectrumType& spectrum = key.getSpectrum();
+
+    std::size_t h = 0;
+    for (double v : spectrum)
+        h ^= std::hash<double>{}(v)+0x9e3779b9 + (h << 6) + (h >> 2);
+
+    h ^= std::hash<double>{}(key.getRecordedFrequency()) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    h ^= std::hash<double>{}(key.getMeasuredInharmonicity()) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    h ^= std::hash<int>{}(PREPROCESSING_VERSION)+0x9e3779b9 + (h << 6) + (h >> 2);
+
+    std::ostringstream oss;
+    oss << std::hex << h;
+    return oss.str();
+}
 
 
 

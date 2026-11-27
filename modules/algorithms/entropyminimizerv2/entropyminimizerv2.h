@@ -86,6 +86,7 @@ private:
     SpectrumType mAccumulator;          ///< Accumulator holding the sum of all spectra
     std::vector<int> mPitch;            ///< Vector of pitches (in cents)
     std::vector<double>mInitialPitch;   ///< Vector of initial pitches
+    std::vector<double>mBForCurve;      ///< Smoothed inharmonicity, used only for the initial tuning curve (V2 1.3)
     int mLowerCutoff;                   ///< Lower cutoff for fluctuations
     int mUpperCutoff;                   ///< Upper cutoff for fluctuations
     bool mRecalculateEntropy;           ///< Flag for entropy recalculation (after manual intervention by the user)

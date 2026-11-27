@@ -85,8 +85,23 @@ void PianoFileIOXml::write(QIODevice *device, const Piano &piano) const {
     writer.writeAttribute("quality", key.getRecognitionQuality());
 
     // spectrum
-    const Key::SpectrumType &spectrum(key.getSpectrum());
+    const Key::SpectrumType& spectrum(key.getSpectrum());
     writer.writeDoubleListElement("spectrum", spectrum);
+
+    // V2 (cahier des charges 1.5): spectre avant mollification.
+    // Écrit seulement s'il a été rempli (donc après un premier calcul).
+    // Les anciens .ept n'ont pas ce champ, et les nouveaux .ept lus par
+    // l'ancienne version l'ignorent (QXmlStreamReader ignore les inconnus).
+    if (key.hasSpectrumCalculate()) {
+        const Key::SpectrumType& spectrumCalc(key.getSpectrumCalculate());
+        writer.writeDoubleListElement("spectrumcalculate", spectrumCalc);
+
+        // V2 (1.5): signature du cache.
+        if (key.hasSpectrumCalculateSignature()) {
+            writer.writeTextElement("spectrumcalculatesignature",
+                key.getSpectrumCalculateSignature());
+        }
+    }
 
     // peaks
     for (auto peak : key.getPeaks()) {
@@ -322,23 +337,41 @@ void PianoFileIOXml::read(QIODevice *device, Piano &piano) {
               }
 
               if (reader.name() == "spectrum") {
-                // spectrum
-                auto &spectrum = key.getSpectrum();
+                  // spectrum
+                  auto& spectrum = key.getSpectrum();
 
-                std::vector<double> readSpectrum =
-                    reader.queryDoubleVectorText();
+                  std::vector<double> readSpectrum =
+                      reader.queryDoubleVectorText();
 
-                if (spectrum.size() != readSpectrum.size()) {
-                  LogW("Spectrum sizes do not match");
-                }
+                  if (spectrum.size() != readSpectrum.size()) {
+                      LogW("Spectrum sizes do not match");
+                  }
 
-                spectrum = readSpectrum;
-              } else if (reader.name() == "peak") {
-                qreal frequency = reader.queryRealAttribute("frequency", -1);
-                qreal intensity = reader.queryRealAttribute("intensity", -1);
-                key.getPeaks()[frequency] = intensity;
-              } else {
-                LogW("Invalid child xml element '%s'", reader.name().c_str());
+                  spectrum = readSpectrum;
+              }
+              else if (reader.name() == "spectrumcalculate") {
+                  // V2 (cahier des charges 1.5): spectre avant mollification.
+                  auto& spectrumCalc = key.getSpectrumCalculate();
+                  std::vector<double> readSpectrum =
+                      reader.queryDoubleVectorText();
+                  if (spectrumCalc.size() != readSpectrum.size()) {
+                      LogW("spectrumcalculate sizes do not match");
+                  }
+                  spectrumCalc = readSpectrum;
+              }
+              else if (reader.name() == "spectrumcalculatesignature") {
+                  // V2 (1.5): signature du cache.
+                  key.setSpectrumCalculateSignature(reader.queryStringText());
+              }
+              else if (reader.name() == "peak") {
+                  qreal frequency = reader.queryRealAttribute("frequency", -1);
+                  qreal intensity = reader.queryRealAttribute("intensity", -1);
+                  key.getPeaks()[frequency] = intensity;
+              }
+              else {
+                  // QXmlStreamReader ignore les éléments inconnus : on ne loggue
+                  // plus "Invalid child xml element" pour rester compatible.
+                  // LogW("Invalid child xml element '%s'", reader.name().c_str());
               }
             }
           }

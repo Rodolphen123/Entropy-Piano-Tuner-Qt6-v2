@@ -54,10 +54,13 @@ AlgorithmDialog::AlgorithmDialog(
     : QDialog(parent), mPiano(piano) {
   EptAssert(currentAlgorithm, "Current algorithm has to exist.");
 
+  LogI("TEST");
+
   QRect pr(parent->contentsRect());
-  setGeometry(pr.center().x() - pr.width() / 4,
-              pr.center().y() - pr.height() / 4, pr.width() / 2,
-              pr.height() / 2);
+  setGeometry(pr.center().x() - pr.width() * 0.4,
+                pr.center().y() - pr.height() * 0.4,
+                pr.width() * 0.8,
+                pr.height() * 1.4);
 
   // load all algorithms on first launch to get the names
   if (mAlgorithmNames.size() == 0) {

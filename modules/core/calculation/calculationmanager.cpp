@@ -327,8 +327,8 @@ bool CalculationManager::hasAlgorithm(const std::string &id) const {
 }
 
 std::string CalculationManager::getDefaultAlgorithmId() const {
-    EptAssert(hasAlgorithm("entropyminimizer"), "Default algorithm does not exits.");
-    return "entropyminimizer";
+    EptAssert(hasAlgorithm("entropyminimizerv2"), "Default algorithm does not exits.");
+    return "entropyminimizerv2";
 }
 
 const AlgorithmFactoryDescription &CalculationManager::getAlgorithmFactoryDescriptionById(const std::string &id) const {

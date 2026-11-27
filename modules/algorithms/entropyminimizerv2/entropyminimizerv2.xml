@@ -106,4 +106,55 @@
 		</description>
 	</param>
 
+	<param id="inharmonicityPolicy" type="list" default="keep">
+		<label>
+			<string>Inharmonicity policy</string>
+			<string lang="de">Inharmonizitäts-Strategie</string>
+			<string lang="zh">非谐性策略</string>
+		</label>
+		<description>
+			<string>How to handle the measured inharmonicity B. "keep" (default): keep the measured B, only fill in the missing ones (B &lt;= 0, i.e. keys above 2250 Hz). "replace": legacy behaviour, replace all B by the robust Theil-Sen fit (two segments).</string>
+			<string lang="de">Behandlung der gemessenen Inharmonizität B. "keep" (Standard): gemessenes B beibehalten, nur fehlende (B &lt;= 0, d.h. Tasten über 2250 Hz) auffüllen. "replace": bisheriges Verhalten, alle B durch den robusten Theil-Sen-Fit (zwei Segmente) ersetzen.</string>
+			<string lang="zh">如何处理测得的非谐性 B。"keep"（默认）：保留测得的 B，仅填充缺失值（B &lt;= 0，即 2250 Hz 以上的键）。"replace"：原有行为，用稳健的 Theil-Sen 拟合（两段）替换所有 B。</string>
+		</description>
+		<entry value="keep">
+			<string>Keep measured, fill missing</string>
+			<string lang="de">Gemessenes behalten, Fehlendes auffüllen</string>
+			<string lang="zh">保留测量值，填充缺失</string>
+		</entry>
+		<entry value="replace">
+			<string>Replace all (legacy)</string>
+			<string lang="de">Alle ersetzen (bisherig)</string>
+			<string lang="zh">全部替换（原有）</string>
+		</entry>
+	</param>
+
+	<param id="highFrequencyPeaksPolicy" type="list" default="complement">
+		<label>
+			<string>High-frequency peaks policy</string>
+			<string lang="de">Strategie für hohe Frequenzen</string>
+			<string lang="zh">高频峰策略</string>
+		</label>
+		<description>
+			<string>How to handle the spectral lines above 5 kHz. "complement" (default): keep the measured spectrum, and only reinforce it where the synthetic model is stronger (spectrum = max(measured, synthetic)), above 5 kHz only. A4 is never cancelled. "off": do nothing. "legacy": overwrite the measured partials 2..6 by the synthetic model (old behaviour, cancels A4).</string>
+			<string lang="de">Behandlung der Spektrallinien über 5 kHz. "complement" (Standard): gemessenes Spektrum beibehalten und nur dort verstärken, wo das synthetische Modell stärker ist (spectrum = max(gemessen, synthetisch)), nur über 5 kHz. A4 wird nie annulliert. "off": nichts tun. "legacy": gemessene Partialtöne 2..6 durch das synthetische Modell überschreiben (altes Verhalten, annulliert A4).</string>
+			<string lang="zh">如何处理 5 kHz 以上的谱线。"complement"（默认）：保留测得频谱，仅在合成模型更强处增强（spectrum = max(测量值, 合成值)），且仅在 5 kHz 以上。A4 永不归零。"off"：不处理。"legacy"：用合成模型覆盖测得的 2..6 次分音（旧行为，会将 A4 归零）。</string>
+		</description>
+		<entry value="complement">
+			<string>Complement (max, above 5 kHz)</string>
+			<string lang="de">Ergänzen (max, über 5 kHz)</string>
+			<string lang="zh">补充（取最大，5 kHz 以上）</string>
+		</entry>
+		<entry value="off">
+			<string>Off (do nothing)</string>
+			<string lang="de">Aus (nichts tun)</string>
+			<string lang="zh">关闭（不处理）</string>
+		</entry>
+		<entry value="legacy">
+			<string>Legacy (overwrite, cancels A4)</string>
+			<string lang="de">Legacy (überschreiben, annulliert A4)</string>
+			<string lang="zh">旧版（覆盖，会将 A4 归零）</string>
+		</entry>
+	</param>
+
 </algorithm>

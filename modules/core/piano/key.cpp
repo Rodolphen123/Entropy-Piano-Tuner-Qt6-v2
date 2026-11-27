@@ -42,7 +42,9 @@ const double Key::fmin       = 20.601722;   // frequ. of lowest bin
 
 void Key::clear()
 {
-    mSpectrum = SpectrumType(NumberOfBins,0);
+    mSpectrum = SpectrumType(NumberOfBins, 0);
+    mSpectrumCalculate.clear();                 // V2 (1.5)
+    mSpectrumCalculateSignature.clear();        // V2 (1.5)
     mPeaks.clear();
     mRecordedFrequency = 0;
     mMeasuredInharmonicity = 0;
@@ -119,10 +121,13 @@ double Key::IndexToFrequency (double m)
 //                   set and get recorded frequency
 //-----------------------------------------------------------------------------
 
-void Key::setRecordedFrequency (const double f)
+void Key::setRecordedFrequency(const double f)
 {
     EptAssert(f > 0 && f < 20000, "Frequency must in the range (0,20000)");
-    mRecordedFrequency=f;
+    mRecordedFrequency = f;
+    // V2 (1.5): invalider le cache spectrumcalculate, car f a changé.
+    mSpectrumCalculate.clear();
+    mSpectrumCalculateSignature.clear();
 }
 
 double Key::getRecordedFrequency () const
@@ -136,15 +141,18 @@ double &Key::getRecordedFrequency ()
 //                  set and get measured inharmonicity
 //-----------------------------------------------------------------------------
 
-void Key::setMeasuredInharmonicity (double B)
+void Key::setMeasuredInharmonicity(double B)
 {
-    EptAssert (B >= 0, "The inharmonicity must be positive");
-    if (B>1)
+    EptAssert(B >= 0, "The inharmonicity must be positive");
+    if (B > 1)
     {
         LogW("Inharmonicity larger than 1 ignored");
         return;
     }
     mMeasuredInharmonicity = B;
+    // V2 (1.5): invalider le cache spectrumcalculate, car B a changé.
+    mSpectrumCalculate.clear();
+    mSpectrumCalculateSignature.clear();
 }
 
 double Key::getMeasuredInharmonicity () const
@@ -228,11 +236,14 @@ double &Key::getOverpull ()
 //                          copy vector to mSpectrum
 //-----------------------------------------------------------------------------
 
-void Key::setSpectrum(const SpectrumType &s)
+void Key::setSpectrum(const SpectrumType& s)
 {
     EptAssert(s.size() == static_cast<size_t>(NumberOfBins),
-              "Spectrum size must match the total number of bins");
+        "Spectrum size must match the total number of bins");
     mSpectrum = s;
+    // V2 (1.5): invalider le cache spectrumcalculate, car le spectre a changé.
+    mSpectrumCalculate.clear();
+    mSpectrumCalculateSignature.clear();
 }
 
 
@@ -246,6 +257,47 @@ Key::SpectrumType &Key::getSpectrum ()
 const Key::SpectrumType & Key::getSpectrum () const
 { return mSpectrum; }
 
+
+//-----------------------------------------------------------------------------
+//              set and get spectrumCalculate (V2 1.5)
+//-----------------------------------------------------------------------------
+
+void Key::setSpectrumCalculate(const SpectrumType& s)
+{
+    EptAssert(s.size() == static_cast<size_t>(NumberOfBins),
+        "Spectrum size must match the total number of bins");
+    mSpectrumCalculate = s;
+}
+
+void Key::setSpectrumCalculateSignature(const std::string& sig)
+{
+    mSpectrumCalculateSignature = sig;
+}
+
+const std::string& Key::getSpectrumCalculateSignature() const
+{
+    return mSpectrumCalculateSignature;
+}
+
+bool Key::hasSpectrumCalculateSignature() const
+{
+    return !mSpectrumCalculateSignature.empty();
+}
+
+const Key::SpectrumType& Key::getSpectrumCalculate() const
+{
+    // V2 (1.5, remarque 1 du 27/11/2026): PAS de fallback sur mSpectrum.
+    // mSpectrum est le spectre mollifié (après applyMollifier), il ne peut
+    // pas servir de spectre avant mollification. Si mSpectrumCalculate est
+    // vide, on retourne un vecteur vide, et AuditoryPreprocessing recalculera
+    // la chaîne de prétraitement.
+    return mSpectrumCalculate;
+}
+
+Key::SpectrumType& Key::getSpectrumCalculate()
+{
+    return mSpectrumCalculate;
+}
 
 //-----------------------------------------------------------------------------
 //                           copy list to mPeaks

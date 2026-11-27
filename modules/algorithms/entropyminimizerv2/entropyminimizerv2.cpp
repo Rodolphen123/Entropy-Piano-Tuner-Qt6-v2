@@ -21,6 +21,9 @@
 //                       Iterative entropy minimization
 //=============================================================================
 
+// mode debug
+//#define CONFIG_ENABLE_XMGRACE
+
 #include "entropyminimizerv2.h"
 
 #include <random>
@@ -188,9 +191,74 @@ bool EntropyMinimizer::performAuditoryPreprocessing()
         AP.setBreakKeyIndex(bk);
     }
 
+    // V2 (cahier des charges 1.3): transmission de inharmonicityPolicy.
+    // "replace" = 0 (ancien comportement, remplacement systématique),
+    // "keep"    = 1 (défaut, conserver B mesuré sauf B <= 0).
+    // NB : le XML fournit une chaîne ; on accepte aussi un int pour
+    // rétro-compatibilité avec d'anciens .xml modifiés à la main.
+    if (mParameters and mParameters->hasStringParameter("inharmonicityPolicy"))
+    {
+        const std::string pol = mParameters->getStringParameter("inharmonicityPolicy");
+        const int policy = (pol == "replace") ? 0 : 1;
+        LogD("EntropyMinimizerV2: inharmonicityPolicy from XML = '%s' -> %d",
+             pol.c_str(), policy);
+        AP.setInharmonicityPolicy(policy);
+    }
+    else if (mParameters and mParameters->hasIntParameter("inharmonicityPolicy"))
+    {
+        const int policy = mParameters->getIntParameter("inharmonicityPolicy");
+        LogD("EntropyMinimizerV2: inharmonicityPolicy (int) = %d", policy);
+        AP.setInharmonicityPolicy(policy);
+    }
+    else
+    {
+        LogD("EntropyMinimizerV2: inharmonicityPolicy absent -> défaut 'keep' (1)");
+    }
+
+    // V2 (cahier des charges 1.4): transmission de highFrequencyPeaksPolicy.
+// "complement" = 2 (défaut V2 : max(mesuré, synthétique) au-dessus de 5 kHz),
+// "off"        = 1 (ne rien faire),
+// "legacy"     = 0 (écrasement, annule A4 : bug C6).
+// NB : le XML fournit une chaîne ; on accepte aussi un int pour
+// rétro-compatibilité avec d'anciens .xml modifiés à la main.
+    if (mParameters and mParameters->hasStringParameter("highFrequencyPeaksPolicy"))
+    {
+        const std::string pol = mParameters->getStringParameter("highFrequencyPeaksPolicy");
+        int policy = 2;
+        if (pol == "off")         policy = 1;
+        else if (pol == "legacy") policy = 0;
+        else if (pol != "complement")
+        {
+            LogW("EntropyMinimizerV2: highFrequencyPeaksPolicy '%s' inconnue, "
+                "repli sur 'complement' (2)", pol.c_str());
+        }
+        LogD("EntropyMinimizerV2: highFrequencyPeaksPolicy from XML = '%s' -> %d",
+            pol.c_str(), policy);
+        AP.setHighFrequencyPeaksPolicy(policy);
+    }
+    else if (mParameters and mParameters->hasIntParameter("highFrequencyPeaksPolicy"))
+    {
+        const int policy = mParameters->getIntParameter("highFrequencyPeaksPolicy");
+        LogD("EntropyMinimizerV2: highFrequencyPeaksPolicy (int) = %d", policy);
+        AP.setHighFrequencyPeaksPolicy(policy);
+    }
+    else
+    {
+        LogD("EntropyMinimizerV2: highFrequencyPeaksPolicy absent -> défaut 'complement' (2)");
+    }
+
     if (not AP.checkDataConsistency()) return false;
 
-    LogI("EntropyMinimzer: Normalize spectra ");
+    LogI("EntropyMinimizerV2: Extrapolate missing inharmonicity values");
+    // V2 (1.3): log de la valeur effective de breakKeyIndex (auto ou surchargée)
+    LogD("EntropyMinimizerV2: effective breakKeyIndex = %d (0 = auto -> numberOfBassKeys)",
+        mParameters and mParameters->hasIntParameter("breakKeyIndex")
+        ? mParameters->getIntParameter("breakKeyIndex") : 0);
+    AP.extrapolateInharmonicity();
+    mBForCurve = AP.getSmoothedInharmonicity();   // V2 (1.3): B lisse pour la courbe initiale
+    if (cancelThread()) return false;
+
+    LogI("EntropyMinimizer: Normalize spectra ");
     for (auto &key : mKeys)
     {
         AP.normalizeSpectrum(key);
@@ -224,14 +292,6 @@ bool EntropyMinimizer::performAuditoryPreprocessing()
         if (cancelThread()) return false;
     }
 
-    LogI("EntropyMinimizerV2: Extrapolate missing inharmonicity values");
-    // V2 (1.3): log de la valeur effective de breakKeyIndex (auto ou surchargée)
-    LogD("EntropyMinimizerV2: effective breakKeyIndex = %d (0 = auto -> numberOfBassKeys)",
-        mParameters and mParameters->hasIntParameter("breakKeyIndex")
-        ? mParameters->getIntParameter("breakKeyIndex") : 0);
-    AP.extrapolateInharmonicity();
-    if (cancelThread()) return false;
-
 #if CONFIG_ENABLE_XMGRACE
     std::ofstream os("0-measured-inharmonicity.dat");
     for (int k=0; k < mNumberOfKeys; ++k)
@@ -247,9 +307,30 @@ bool EntropyMinimizer::performAuditoryPreprocessing()
     AP.improveHighFrequencyPeaks();
 
     LogI("EntropyMinimizerV2: Mollify spectral lines");
-    // V2 (cahier des charges 1.5): read scale and maxBassWidth from the XML
-    // parameters. Defaults (1.0 and 50.0) reproduce the legacy behaviour
-    // when the XML entries are missing.
+
+    // V2 (cahier des charges 1.5): conserver le spectre avant mollification.
+    // Le cache est rempli si :
+    //   - il n'existe pas (premier calcul, ou ancien .ept) ;
+    //   - ou sa signature ne correspond plus (spectrum, f, B, ou version
+    //     du prétraitement ont changé).
+    // Sinon, il est réutilisé tel quel.
+    for (int k = 0; k < mNumberOfKeys; ++k)
+    {
+        Key& key = mKeys[k];
+        const std::string currentSig = AP.computeSpectrumCalculateSignature(k);
+        if (!key.hasSpectrumCalculate()
+            || key.getSpectrumCalculateSignature() != currentSig)
+        {
+            key.setSpectrumCalculate(key.getSpectrum());
+            key.setSpectrumCalculateSignature(currentSig);
+            LogD("Key %d: spectrumcalculate recalculé (signature=%s)", k, currentSig.c_str());
+        }
+        else
+        {
+            LogD("Key %d: spectrumcalculate réutilisé (signature=%s)", k, currentSig.c_str());
+        }
+    }
+
     double mollifierScale = mParameters->getDoubleParameter("scale");
     double maxBassWidth = mParameters->getDoubleParameter("maxBassWidth");
     LogD("EntropyMinimizerV2: mollifierScale = %f, maxBassWidth = %f",
@@ -260,6 +341,16 @@ bool EntropyMinimizer::performAuditoryPreprocessing()
         showCalculationProgress(key, 0, 1);
         if (cancelThread()) return false;
     }
+
+    // V2 (1.5): après applyMollifier, key.getSpectrum() est le spectre mollifié.
+    // key.getSpectrumCalculate() est le spectre avant mollification.
+    // Pour 3.5 (multi-échelle) et 2.4 (H_rec), on utilise getSpectrumCalculate().
+    //
+    // Exemple pour 3.5 (à implémenter plus tard) :
+    //   for (auto &key : mKeys) {
+    //       key.setSpectrum(key.getSpectrumCalculate());  // restaurer
+    //       AP.applyMollifier(key, newScale, maxBassWidth);  // remollifier
+    //   }
 
 
 #if CONFIG_ENABLE_XMGRACE
@@ -435,8 +526,28 @@ void EntropyMinimizer::ComputeInitialTuningCurve ()
     if (mKeyNumberOfA4<=13 or mNumberOfKeys-mKeyNumberOfA4<=13) return;
 
     // Return the measured (and extrapolated) inharmonicity B:
+    // V2 (1.3): B lisse (voir AuditoryPreprocessing::extrapolateInharmonicity),
+    // car la courbe iterative k-12 -> k propage les irregularites de B.
     auto B = [this] (int keynumber)
-    { return mKeys[keynumber].getMeasuredInharmonicity(); };
+    {
+        return (static_cast<int>(mBForCurve.size()) == mNumberOfKeys)
+                ? mBForCurve[keynumber]
+                : mKeys[keynumber].getMeasuredInharmonicity();
+    };
+
+    #if CONFIG_ENABLE_XMGRACE
+        qDebug() << "=== B V2 ==="
+            << "A4 =" << mKeyNumberOfA4
+            << "Keys =" << mNumberOfKeys;
+
+        for (int k = 0; k < mNumberOfKeys; ++k)
+        {
+            qDebug().noquote()
+                << QString("B_V2,%1,%2")
+                .arg(k)
+                .arg(B(k), 0, 'g', 12);
+        }
+    #endif
 
     // Compute the expected stretch deviation of the n_th partial of a given key:
     auto cents = [B] (int keynumber, int n)
@@ -478,6 +589,19 @@ void EntropyMinimizer::ComputeInitialTuningCurve ()
         double fraction = 1.0*k/numberA3;
         setValue(k,pitch63*fraction+pitch105*(1-fraction));
     }
+
+    // ===== DIAGNOSTIC TEMPORAIRE : chaîne d'extension à droite =====
+    #if CONFIG_ENABLE_XMGRACE
+        for (int k = 60; k < mNumberOfKeys; ++k)
+        {
+            const double Bk = mKeys[k].getMeasuredInharmonicity();
+            LogI("DIAG ComputeInitial: key=%d B=%.6e cents2=%.3f cents4=%.3f "
+                "mInitialPitch=%.3f mPitch=%d tolerance=%d",
+                k, Bk, cents(k, 2), cents(k, 4),
+                mInitialPitch[k], mPitch[k], getTolerance(k));
+        }
+    #endif
+    // ==============================================================
 }
 
 
@@ -575,6 +699,15 @@ void EntropyMinimizer::minimizeEntropy ()
 
     setAllSpectralComponents();
 
+    // ===== DIAGNOSTIC TEMPORAIRE : état avant Monte-Carlo =====
+    #if CONFIG_ENABLE_XMGRACE
+        for (int k = 60; k < mNumberOfKeys; ++k)
+            LogI("DIAG BeforeMC: key=%d mPitch=%d mInitialPitch=%.3f",
+                k, mPitch[k], mInitialPitch[k]);
+    #endif
+    // =========================================================
+     
+    
     // compute initial entropy
     double H = computeEntropy();
     LogI("STARTING WITH ENTROPY H=%lf.",H);
@@ -720,6 +853,13 @@ void EntropyMinimizer::minimizeEntropy ()
             }
         }
     }
+
+    // ===== DIAGNOSTIC TEMPORAIRE : état après Monte-Carlo =====
+    // for (int k = 60; k < mNumberOfKeys; ++k)
+    //    LogI("DIAG AfterMC: key=%d mPitch=%d mInitialPitch=%.3f",
+    //        k, mPitch[k], mInitialPitch[k]);
+    // ========================================================
+
 #if CONFIG_ENABLE_XMGRACE
     for (int k=0; k < mNumberOfKeys; ++k) writeSpectrum(k,"middle",mPitch[k]-getRecordedPitchET440(k));
 #endif // CONFIG_ENABLE_XMGRACE

@@ -1,6 +1,6 @@
-# Cahier des charges V2.5 — Entropy Piano Tuner (Qt 6) : amélioration acoustique et algorithmique
+# Cahier des charges V2.7 — Entropy Piano Tuner (Qt 6) : amélioration acoustique et algorithmique
 
-*Version consolidée du 15/11/2026. Statuts des constats techniques : **Vérifié** = lu directement dans le code ou dans un fichier .ept ; **Scan** = issu du scan du code, à confirmer par le banc d'essai.*
+*Version consolidée du 27/11/2026. Statuts des constats techniques : **Vérifié** = lu directement dans le code ou dans un fichier .ept ; **Scan** = issu du scan du code, à confirmer par le banc d'essai.*
 
 **En bref (tout le projet).** Entropy Piano Tuner calcule la hauteur idéale de chaque note d'un piano à partir de son enregistrement. Ce cahier des charges décrit comment rendre ce calcul plus juste (mesures plus précises), reproductible (même résultat à chaque lancement) et plus complet (exploration plus poussée, point de rupture du chevalet, journal des essais). Le temps de calcul n'est pas une contrainte : jusqu'à environ 45 minutes sont acceptables entre le scan du piano et l'accord.
 
@@ -76,6 +76,7 @@
 - **1.5 Échelle du mollificateur** *(copie v2)* : applyMollifier(key, scale), scale = 1 reproduit l'actuel. Largeur bornée dans les graves (valeur à fixer sur données). Conserver le spectre avant mollification (environ N × NumberOfBins doubles).
 - **1.6 Coupure basse** *(copie v2)* : remplacer 5·ftom(f)/6 par ftom(5.0·f/6.0). À noter dans la non-régression.
 - **1.7 Fenêtrage temporel** : fenêtre paramétrable pour comparer, sur signaux synthétiques, le fondu actuel (2 %), Tukey (α entre 0,1 et 0,2), Hann et Blackman-Harris.
+- 1.8 — Conservation du spectre avant mollification (spectrumcalculate)
 
 ### Lot 2 — Interface, paramètres et indicateur d'entropie (Qt 6 / Qwt)
 
@@ -184,7 +185,7 @@
 - Fenêtre issue de la tolérance de l'ancien module suffisante pour l'octave centrale (réponse du journal) ?
 - breakKeyIndex : valeur par défaut mNumberOfBassKeys ou détection depuis les données ?
 - Format du journal : JSON ou CSV ?
-- libuv : retirable ou non (résultat de `git grep -nE 'uv.h|uv_|libuv'`) ?
+- libuv : retirable ou non (résultat de `git grep -nE 'uv.h|uv_|libuv'`) ? libuv conservé, utilisé par sharedlibrary.cpp pour le chargement des plug-ins ; pas de retrait. 
 
 ## 8. Historique des versions
 
@@ -193,6 +194,38 @@
 - **V2.3** : construction progressive, journalisation, audit de pondération à la place de l'égaliseur.
 - **V2.4** : ancrage sur le tempérament théorique, Break à 4 touches, trois étapes de 3.9 avec fenêtre égale à la tolérance de l'ancien module, critère de succès, résumés « En bref », annexe des séquences.
 - **V2.5** : nombre de touches variable (N, notes relatives à A4), contenu des .ept établi (C14) et plan d'essais sans WAV, arrondis de getPitchET440, précision XML ramenée à une phrase, test d'ouverture croisée des .ept, séquences complétées (A3 en méthode 1, F3 en méthode 2).
+
+## 9 — Amélioration à envisager
+- 9.1 Robustesse des valeurs d'inharmonicité B mesurées
+Il s'agit d'une amélioration complémentaire au point 1.3 : le point 1.3 construit une tendance robuste et extrapole les valeurs manquantes ; le point 9.1 utilise cette tendance pour repérer d'éventuelles mesures positives atypiques.
+- 9.2 — Évolution future : parallélisation multicœur
+
+**Objectif :** réduire le temps de calcul d'Entropy Piano Tuner en exploitant plusieurs cœurs du processeur, sans compromettre la précision, la reproductibilité ni le déterminisme des résultats.
+
+La parallélisation sera envisagée après stabilisation et validation de la version séquentielle de `entropyminimizerv2`. Elle ne doit pas retarder le développement ni modifier prématurément l'architecture de l'optimiseur.
+
+**Axes de parallélisation envisagés :**
+
+1. **Prétraitement par touche** : paralléliser les traitements indépendants (analyse FFT, estimation de l'inharmonicité B, prétraitement spectral), chaque touche pouvant être traitée séparément dans les limites de ses dépendances.
+2. **Construction progressive des candidats (3.9)** : paralléliser l'évaluation de candidats indépendants avant leur optimisation globale.
+3. **Calcul de l'entropie** : étudier la parallélisation des sommes et réductions internes, avec un ordre de réduction contrôlé pour limiter les écarts numériques.
+
+**Contraintes impératives :**
+
+- Conserver une version séquentielle de référence.
+- Préserver le déterminisme des parcours et des décisions de l'optimiseur.
+- Éviter les mises à jour concurrentes non maîtrisées de l'accumulateur d'entropie.
+- Comparer systématiquement les résultats multicœurs à ceux de la version séquentielle.
+- Vérifier que les éventuelles différences numériques restent dans les tolérances définies par le cahier des charges.
+- Pouvoir interrompre proprement les calculs en cours.
+
+**Stratégie de mise en œuvre :**
+
+La parallélisation sera progressive : commencer par les tâches indépendantes, puis étudier les calculs internes de l'optimiseur. Chaque étape devra démontrer un gain de performance mesurable sans dégradation de la qualité de l'accord.
+
+Le temps de calcul n'étant pas une contrainte majeure (jusqu'à environ 45 minutes étant acceptable entre le scan et l'accord), la priorité reste la qualité acoustique et la fiabilité des résultats, avant la vitesse d'exécution.
+
+**Statut :** évolution future, non prioritaire. À engager après stabilisation et validation de l'optimiseur séquentiel.
 
 ## Annexe A — Séquences d'accordage (ordre d'ajout des notes)
 
@@ -261,3 +294,76 @@ Les étapes 13 à 15 sont ajoutées pour compléter la zone F3–F4. G4 (étape 
 | 14 | La♯2 | A#3 | 37 | −11 |
 
 Couvre les 13 notes de F3 à F4.
+
+
+## Annexe B — Conservation du spectre avant mollification (1.8)
+
+**En bref.** On conserve le spectre préparé par v2 avant `applyMollifier`, dans un champ optionnel `spectrumcalculate` du `.ept`. Ce cache permet de reconstruire les spectres à chaque échelle du mollificateur et de calculer H_rec/H_courbe. Les anciens fichiers sans cache restent utilisables.
+
+### Contexte
+
+`applyMollifier` modifie le spectre de manière irréversible. Le multi-échelle (3.5) doit pouvoir appliquer plusieurs mollificateurs au même spectre préparé. L’indicateur 2.4 doit également comparer H_rec (décalage nul) et H_courbe avec la même chaîne de prétraitement.
+
+### Données et traitement
+
+Le champ `spectrum` reste le spectre issu de l’analyse et sert de source au prétraitement. Le champ `spectrumcalculate` contient une copie dérivée de 10 800 bins après la chaîne de prétraitement v2 et avant `applyMollifier` : normalisation, extrapolation de B, nettoyage, coupure basse, conversion SPLA et amélioration éventuelle des pics aigus. L’ordre effectif de ces opérations est celui du code v2 ; en particulier, l’extrapolation de B précède le nettoyage lorsque cette chaîne est utilisée.
+
+Le cache est une donnée calculée, pas une copie de `spectrum`. Le code ne doit jamais considérer un `<spectrum>` sans cache comme déjà prétraité.
+
+### Lecture et repli
+
+- Si `spectrumcalculate` existe et que sa signature de validité correspond aux données et paramètres courants, le charger comme spectre prétraité.
+- Si le cache est absent ou invalide, repartir de `spectrum`, exécuter toute la chaîne de prétraitement v2, puis produire un nouveau `spectrumcalculate` en mémoire.
+- L’absence de cache ne doit pas empêcher l’ouverture ou le calcul d’un ancien `.ept`, ni déclencher d’avertissement destiné à l’utilisateur. Un message de diagnostic interne peut indiquer qu’un cache est recalculé.
+- Ne pas générer un cache en copiant simplement `spectrum` dans `spectrumcalculate`. Aucun script de conversion ne doit effectuer cette copie.
+
+### État de l’implémentation au 27/11/2026
+
+**Codé, à tester :** stockage de `mSpectrumCalculate` dans `Key`, lecture/écriture des champs XML `<spectrumcalculate>` et `<spectrumcalculatesignature>`, invalidation lors du changement du spectre, de la fréquence enregistrée ou du B mesuré, et création d’une copie avant `applyMollifier`.
+
+**À compléter :** le prétraitement est encore exécuté à chaque calcul et le cache n’est pas encore lu pour alimenter le calcul. La réutilisation effective pour le multi-échelle (3.5) et H_rec/H_courbe (2.4) reste à implémenter avec ces fonctions. Le cache actuel est donc conservé et sérialisé, mais ne procure pas encore ces usages.
+
+La signature actuellement codée inclut `spectrum`, `recordedFrequency`, `measuredInharmonicity` et `PREPROCESSING_VERSION`. Elle ne comprend pas encore les paramètres effectifs de prétraitement ni les données piano qui déterminent le Break automatique. Il faut les inclure avant de considérer un cache comme valide. Le code utilise actuellement `std::hash` ; sa stabilité entre implémentations ou versions n’étant pas garantie, le format de signature doit être choisi pour permettre une invalidation fiable.
+### Validité et invalidation
+
+Le cache doit porter une signature permettant de savoir s’il correspond encore à ses entrées. Cette signature comprend au minimum une version de la chaîne de prétraitement, les paramètres effectifs et les données sources dont dépend le résultat.
+
+Invalider le cache si l’un des éléments suivants change :
+
+- le spectre source, la fréquence enregistrée ou le B mesuré d’une touche ;
+- les données du piano qui affectent le calcul, notamment le nombre de touches, l’indice de A4 ou le nombre de touches de basse utilisé pour déterminer automatiquement le Break ;
+- les paramètres de prétraitement, notamment `highFrequencyPeaksPolicy`, `inharmonicityPolicy` et la valeur effective de `breakKeyIndex` ;
+- la version de la chaîne de prétraitement ou toute constante de prétraitement intégrée au code.
+
+Les paramètres appliqués après la création du cache, comme `scale` et `maxBassWidth` du mollificateur, ne l’invalident pas. Une invalidation globale du fichier est acceptable et plus simple à maintenir qu’une invalidation touche par touche.
+
+Après invalidation, le cache est recalculé au prochain calcul et enregistré lors de la prochaine sauvegarde. Un réenregistrement ou une modification des données pendant un calcul doit être empêché, ou explicitement traité comme non pris en charge ; l’interface devrait désactiver « Enregistrer » pendant ce calcul.
+
+### Écriture et compatibilité
+
+`<spectrumcalculate>` est écrit dans chaque `<key>` lors de la sauvegarde, une fois le cache calculé. Il n’y a pas de sauvegarde automatique. Sans sauvegarde, le cache sera recalculé au prochain calcul.
+
+Les anciens `.ept` sans ce champ restent chargeables. La compatibilité des nouveaux fichiers avec l’ancienne version doit être vérifiée concrètement : celle-ci doit pouvoir ouvrir, puis sauvegarder le fichier sans supprimer ni corrompre le champ inconnu. Ne pas présumer que TinyXML-2 préserve les balises inconnues sans test.
+
+### Modifications prévues
+
+| Fichier | Modification |
+| --- | --- |
+| `modules/core/file/pianofileioxml.cpp/h` | Lecture et écriture de `<spectrumcalculate>` et de sa signature de validité. |
+| `modules/core/piano/key.cpp/h` | Stockage du cache et de sa validité ; accès séparé au spectre source et au cache prétraité. |
+| `modules/algorithms/entropyminimizerv2/auditorypreprocessing.cpp` | Création du cache après le prétraitement, avant `applyMollifier`. |
+| `modules/algorithms/entropyminimizerv2/entropyminimizerv2.cpp` | Réutilisation du cache valide pour les niveaux du mollificateur et H_rec/H_courbe. |
+
+### Points d’attention
+
+- Le champ double la quantité de spectres stockés ; la taille textuelle du `.ept` peut augmenter d’environ 14 Mo pour 88 touches. Mesurer la taille réelle sur un fichier représentatif.
+- Les calculs parallèles ou les interruptions doivent laisser le cache dans un état clairement valide ou invalide, jamais partiellement écrit comme valide.
+- La sauvegarde croisée depuis l’ancienne version doit préserver le champ inconnu ; ce comportement est à démontrer par un test d’ouverture et de sauvegarde.
+
+### Tests
+
+- **Ancien fichier sans cache** : il s’ouvre et calcule en repartant de `spectrum` et en exécutant le prétraitement complet.
+- **Équivalence cache** : comparer, dans la même version et avec les mêmes paramètres, le résultat d’un calcul sans cache à celui après sauvegarde, réouverture et réutilisation du cache. Les spectres préparés et résultats doivent correspondre dans la tolérance numérique définie.
+- **Invalidation** : modifier le spectre, une fréquence, un B ou un paramètre de prétraitement ; vérifier que l’ancien cache est ignoré et recalculé.
+- **Mollificateur** : modifier uniquement `scale` ou `maxBassWidth` ; vérifier que le cache pré-mollification est réutilisé, puis que le spectre mollifié est recalculé.
+- **Compatibilité croisée** : ouvrir puis sauvegarder un `.ept` avec cache dans l’ancienne version et vérifier que le champ est préservé et que le reste du fichier demeure valide.

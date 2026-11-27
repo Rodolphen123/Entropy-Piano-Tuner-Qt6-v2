@@ -73,6 +73,25 @@ public:
     const SpectrumType &getSpectrum() const;        ///< Get a read-only reference to mSpectrum
     SpectrumType &getSpectrum();                    ///< Get a read-write reference of mSpectrum
 
+    // V2 (cahier des charges 1.5/3.5): spectre avant mollification.
+    // Ce champ est optionnel : s'il est vide, getSpectrumCalculate() retourne
+    // un vecteur vide (PAS mSpectrum : voir remarque 1 du 27/11/2026).
+    // Le cache est rempli par AuditoryPreprocessing après la chaîne de
+    // prétraitement (normalize, clean, cut, SPLA, extrapolate, improve)
+    // et AVANT applyMollifier.
+    void setSpectrumCalculate(const SpectrumType& s);
+    const SpectrumType& getSpectrumCalculate() const;
+    SpectrumType& getSpectrumCalculate();
+    bool hasSpectrumCalculate() const { return !mSpectrumCalculate.empty(); }
+
+    // V2 (cahier des charges 1.5): signature du cache spectrumcalculate.
+    // Elle dépend de spectrum, recordedFrequency, measuredInharmonicity
+    // et de la version du prétraitement. Si elle ne correspond pas,
+    // le cache est invalide et doit être recalculé.
+    void setSpectrumCalculateSignature(const std::string& sig); // déclaration
+    const std::string& getSpectrumCalculateSignature() const;   // déclaration
+    bool hasSpectrumCalculateSignature() const;                 // déclaration
+
     void setPeaks (const PeakListType &s);          ///< Copy map of peaks
     const PeakListType &getPeaks() const;           ///< Get a read-only reference to mPeaks
     PeakListType &getPeaks();                       ///< Get a read-write reference of mPeaks
@@ -107,6 +126,10 @@ public:
 
 private:
     SpectrumType mSpectrum;             ///< Logarithmically organized spectrum
+
+    SpectrumType mSpectrumCalculate;            ///< Spectre avant mollification (V2 1.5)
+    std::string mSpectrumCalculateSignature;    ///< Signature du cache (V2 1.5)
+
     PeakListType mPeaks;                ///< List of identified peaks
     double mRecordedFrequency;          ///< Recorded frequency of 1st partial in Hz
     double mMeasuredInharmonicity;      ///< Measured inharmonicity of recorded signal

@@ -417,6 +417,18 @@ void EntropyMinimizer::ComputeInitialTuningCurve ()
     auto B = [this] (int keynumber)
     { return mKeys[keynumber].getMeasuredInharmonicity(); };
 
+    qDebug() << "=== B ORIGINAL ==="
+        << "A4 =" << mKeyNumberOfA4
+        << "Keys =" << mNumberOfKeys;
+
+    for (int k = 0; k < mNumberOfKeys; ++k)
+    {
+        qDebug().noquote()
+            << QString("B_ORIGINAL,%1,%2")
+            .arg(k)
+            .arg(B(k), 0, 'g', 12);
+    }
+
     // Compute the expected stretch deviation of the n_th partial of a given key:
     auto cents = [B] (int keynumber, int n)
     { return 600.0  / MathTools::LOG2 * log((1+n*n*B(keynumber))/(1+B(keynumber))); };

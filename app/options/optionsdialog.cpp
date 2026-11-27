@@ -85,6 +85,7 @@ OptionsDialog::OptionsDialog(MainWindow *mainWindow)
     onCurrentSelectionChanged(startupId);
     QObject::connect(group, SIGNAL(buttonClicked(int)), this, SLOT(onCurrentSelectionChanged(int)));
 
+    setMinimumSize(900, 600);
     resize(mMainWindow->centralWidget()->size());
     SHOW_DIALOG(this);
 }

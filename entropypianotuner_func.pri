@@ -160,7 +160,7 @@ defineReplace(depends_libuv) {
         LIBS += -L$$EPT_ROOT_OUT_DIR/thirdparty/libuv -luv
 
         linux:LIBS += -ldl
-        #win32|win32-g++:LIBS += -lws2_32 -lpsapi -liphlpapi -lshell32 -luserenv -lkernel32 -ladvapi32
+        win32:LIBS += -lws2_32 -lpsapi -liphlpapi -lshell32 -luser32 -luserenv -ladvapi32
     }
 
     export(LIBS)
