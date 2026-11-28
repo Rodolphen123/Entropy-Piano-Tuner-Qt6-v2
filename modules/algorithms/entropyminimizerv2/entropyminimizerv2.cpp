@@ -25,6 +25,7 @@
 //#define CONFIG_ENABLE_XMGRACE
 
 #include "entropyminimizerv2.h"
+#include "entropyevaluator.h"
 
 #include <random>
 #include <iostream>
@@ -39,6 +40,7 @@
 #include "core/messages/messagehandler.h"
 #include "core/messages/messagechangetuningcurve.h"
 #include "core/messages/messagecaluclationprogress.h"
+#include "core/messages/messagespectrumcalculate.h"
 
 #include "auditorypreprocessing.h"
 
@@ -62,7 +64,9 @@ EntropyMinimizer::EntropyMinimizer(const Piano &piano,
     mInitialPitch(mNumberOfKeys),
     mRecalculateEntropy(false),
     mRecalculateKey(-1),
+    mAccumulatorCommun(NumberOfBins),
     mRecalculateFrequency(0)
+
 {
     // Define cutoffs for the logarithmic spectra
     // In order to be able to shift them up and down by up to one half tone,
@@ -249,6 +253,26 @@ bool EntropyMinimizer::performAuditoryPreprocessing()
 
     if (not AP.checkDataConsistency()) return false;
 
+    // Conserver les spectres d'entrée : le prétraitement moteur les modifie,
+    // alors que H_commun doit toujours repartir des données brutes du .ept.
+    std::vector<Key::SpectrumType> rawSpectra;
+    rawSpectra.reserve(mNumberOfKeys);
+    for (const auto& key : mKeys) rawSpectra.push_back(key.getSpectrum());
+
+    // L'extrapolation de B invalide le cache via setMeasuredInharmonicity().
+    // Le sauvegarder temporairement permet de le valider avec le B effectif.
+    std::vector<Key::SpectrumType> cachedSpectrumSnapshots(mNumberOfKeys);
+    std::vector<std::string> cachedSignatureSnapshots(mNumberOfKeys);
+    for (int k = 0; k < mNumberOfKeys; ++k)
+    {
+        const Key& key = mKeys[k];
+        if (key.hasSpectrumCalculate())
+        {
+            cachedSpectrumSnapshots[k] = key.getSpectrumCalculate();
+            cachedSignatureSnapshots[k] = key.getSpectrumCalculateSignature();
+        }
+    }
+
     LogI("EntropyMinimizerV2: Extrapolate missing inharmonicity values");
     // V2 (1.3): log de la valeur effective de breakKeyIndex (auto ou surchargée)
     LogD("EntropyMinimizerV2: effective breakKeyIndex = %d (0 = auto -> numberOfBassKeys)",
@@ -256,27 +280,59 @@ bool EntropyMinimizer::performAuditoryPreprocessing()
         ? mParameters->getIntParameter("breakKeyIndex") : 0);
     AP.extrapolateInharmonicity();
     mBForCurve = AP.getSmoothedInharmonicity();   // V2 (1.3): B lisse pour la courbe initiale
+    for (int k = 0; k < mNumberOfKeys; ++k)
+    {
+        if (!cachedSpectrumSnapshots[k].empty())
+        {
+            mKeys[k].setSpectrumCalculate(cachedSpectrumSnapshots[k]);
+            mKeys[k].setSpectrumCalculateSignature(cachedSignatureSnapshots[k]);
+        }
+    }
     if (cancelThread()) return false;
 
-    LogI("EntropyMinimizer: Normalize spectra ");
-    for (auto &key : mKeys)
+    // Valider le cache avant les opérations coûteuses. La signature est
+    // calculée sur le spectre brut et le B effectif après extrapolation.
+    std::vector<bool> spectrumCalculateNeedsProcessing(mNumberOfKeys, true);
+    std::vector<std::string> spectrumCalculateSignatures(mNumberOfKeys);
+    for (int k = 0; k < mNumberOfKeys; ++k)
     {
+        Key& key = mKeys[k];
+        spectrumCalculateSignatures[k] = AP.computeSpectrumCalculateSignature(k);
+        if (key.hasSpectrumCalculate()
+            && key.getSpectrumCalculateSignature() == spectrumCalculateSignatures[k])
+        {
+            key.getSpectrum() = key.getSpectrumCalculate();
+            spectrumCalculateNeedsProcessing[k] = false;
+            LogD("Key %d: spectrumcalculate réutilisé (signature=%s)",
+                k, spectrumCalculateSignatures[k].c_str());
+        }
+    }
+
+    LogI("EntropyMinimizer: Normalize spectra ");
+    for (int k = 0; k < mNumberOfKeys; ++k)
+    {
+        if (!spectrumCalculateNeedsProcessing[k]) continue;
+        auto& key = mKeys[k];
         AP.normalizeSpectrum(key);
         showCalculationProgress(key,0,0.25);
         if (cancelThread()) return false;
     }
 
     LogI("EntropyMinimzer: Clean spectra ");
-    for (auto &key : mKeys)
+    for (int k = 0; k < mNumberOfKeys; ++k)
     {
+        if (!spectrumCalculateNeedsProcessing[k]) continue;
+        auto& key = mKeys[k];
         AP.cleanSpectrum(key);
         showCalculationProgress(key,0.25,0.25);
         if (cancelThread()) return false;
     }
 
     LogI("EntropyMinimizerV2: Cut low frequencies ");
-    for (auto &key : mKeys)
+    for (int k = 0; k < mNumberOfKeys; ++k)
     {
+        if (!spectrumCalculateNeedsProcessing[k]) continue;
+        auto& key = mKeys[k];
         AP.cutLowFrequencies(key);
         showCalculationProgress(key,0.5,0.25);
         if (cancelThread()) return false;
@@ -284,8 +340,10 @@ bool EntropyMinimizer::performAuditoryPreprocessing()
 
     LogI("EntropyMinimzer: Apply SPLA filter");
     AP.initializeSPLAFilter();
-    for (auto &key : mKeys)
+    for (int k = 0; k < mNumberOfKeys; ++k)
     {
+        if (!spectrumCalculateNeedsProcessing[k]) continue;
+        auto& key = mKeys[k];
         SpectrumType &spectrum = key.getSpectrum();
         AP.convertToSPLA(spectrum);
         showCalculationProgress(key,0.75,0.25);
@@ -304,32 +362,53 @@ bool EntropyMinimizer::performAuditoryPreprocessing()
 #endif // CONFIG_ENABLE_XMGRACE
 
     LogI("EntropyMinimizerV2: Amend high-frequency spectral lines");
-    AP.improveHighFrequencyPeaks();
+    AP.improveHighFrequencyPeaks(&spectrumCalculateNeedsProcessing);
 
     LogI("EntropyMinimizerV2: Mollify spectral lines");
 
-    // V2 (cahier des charges 1.5): conserver le spectre avant mollification.
-    // Le cache est rempli si :
-    //   - il n'existe pas (premier calcul, ou ancien .ept) ;
-    //   - ou sa signature ne correspond plus (spectrum, f, B, ou version
-    //     du prétraitement ont changé).
-    // Sinon, il est réutilisé tel quel.
+    // Enregistrer les résultats nouvellement calculés avant mollification.
     for (int k = 0; k < mNumberOfKeys; ++k)
     {
+        if (!spectrumCalculateNeedsProcessing[k]) continue;
         Key& key = mKeys[k];
-        const std::string currentSig = AP.computeSpectrumCalculateSignature(k);
-        if (!key.hasSpectrumCalculate()
-            || key.getSpectrumCalculateSignature() != currentSig)
-        {
-            key.setSpectrumCalculate(key.getSpectrum());
-            key.setSpectrumCalculateSignature(currentSig);
-            LogD("Key %d: spectrumcalculate recalculé (signature=%s)", k, currentSig.c_str());
-        }
+        key.setSpectrumCalculate(key.getSpectrum());
+        key.setSpectrumCalculateSignature(spectrumCalculateSignatures[k]);
+        MessageHandler::send<MessageSpectrumCalculate>(
+            k, key.getSpectrumCalculate(), spectrumCalculateSignatures[k]);
+        LogD("Key %d: spectrumcalculate calculé (signature=%s)",
+            k, spectrumCalculateSignatures[k].c_str());
+    }
+
+    // H_moteur reprend ces résultats cachés et ne refait que la mollification.
+    // H_commun reste calculé depuis les spectres bruts selon sa chaîne dédiée.
+    {
+        EntropyEvaluator evaluator(mPiano);
+        EntropyEvaluator::Parameters evalParams;
+        evalParams.highFrequencyPeaksPolicy = mParameters->hasIntParameter("highFrequencyPeaksPolicy")
+            ? mParameters->getIntParameter("highFrequencyPeaksPolicy") : 2;
+        evalParams.inharmonicityPolicy = mParameters->hasIntParameter("inharmonicityPolicy")
+            ? mParameters->getIntParameter("inharmonicityPolicy") : 1;
+        evalParams.breakKeyIndex = mParameters->hasIntParameter("breakKeyIndex")
+            ? mParameters->getIntParameter("breakKeyIndex") : 0;
+        evalParams.mollifierScale = mParameters->getDoubleParameter("scale");
+        evalParams.maxBassWidth = mParameters->getDoubleParameter("maxBassWidth");
+
+        std::vector<Key::SpectrumType> cachedSpectra;
+        cachedSpectra.reserve(mNumberOfKeys);
+        for (const auto& key : mKeys)
+            cachedSpectra.push_back(key.getSpectrumCalculate());
+
+        if (!evaluator.prepare(evalParams, &cachedSpectra, &rawSpectra))
+            LogW("EntropyMinimizerV2: EntropyEvaluator::prepare a échoué");
         else
         {
-            LogD("Key %d: spectrumcalculate réutilisé (signature=%s)", k, currentSig.c_str());
+            mMoteurSpectra = evaluator.getMoteurSpectra();
+            mCommunSpectra = evaluator.getCommunSpectra();
+            LogI("EntropyMinimizerV2: H_moteur et H_commun préparés (%d touches)",
+                static_cast<int>(mCommunSpectra.size()));
         }
     }
+
 
     double mollifierScale = mParameters->getDoubleParameter("scale");
     double maxBassWidth = mParameters->getDoubleParameter("maxBassWidth");
@@ -493,6 +572,36 @@ void EntropyMinimizer::setAllSpectralComponents ()
 
         addToAccumulator(spectrum,pitchdiff,1);
     }
+}
+
+//-----------------------------------------------------------------------------
+//          V2 (2.4): setAllSpectralComponents pour H_commun
+//-----------------------------------------------------------------------------
+
+void EntropyMinimizer::setAllSpectralComponentsCommun()
+{
+    mAccumulatorCommun.assign(NumberOfBins, 0);
+    for (int k = 0; k < mNumberOfKeys; ++k)
+    {
+        const SpectrumType& spectrum = mCommunSpectra[k];
+        int recorded_pitch = getRecordedPitchET440AsInt(k);
+        int pitchdiff = mPitch[k] - recorded_pitch;
+        for (int m = 0; m < NumberOfBins; ++m)
+        {
+            mAccumulatorCommun[m] += getElement(const_cast<SpectrumType&>(spectrum), m - pitchdiff);
+        }
+    }
+}
+
+//-----------------------------------------------------------------------------
+//          V2 (2.4): computeEntropy pour H_commun
+//-----------------------------------------------------------------------------
+
+double EntropyMinimizer::computeEntropyCommun()
+{
+    SpectrumType copy(mAccumulatorCommun);
+    MathTools::normalize(copy);
+    return MathTools::computeEntropy(copy);
 }
 
 //-----------------------------------------------------------------------------
@@ -722,6 +831,16 @@ void EntropyMinimizer::minimizeEntropy ()
         // update entropy and tuning curve
         H = Hnew;
         LogI("ENTROPY H=%lf.",H);
+
+        // V2 (2.4): mise à jour de H_courbe_commun (H_moteur est déjà H).
+        mH_courbe_moteur = H;
+        if (!mCommunSpectra.empty())
+        {
+            setAllSpectralComponentsCommun();
+            mH_courbe_commun = computeEntropyCommun();
+        }
+
+
         if (keynumber>=0) updateTuningcurve(keynumber);
         else updateTuningcurve();
 
@@ -839,6 +958,29 @@ void EntropyMinimizer::minimizeEntropy ()
                 for (int k=keynumber; k<mNumberOfKeys; ++k) mPitch[k]+=sign;
             }
             setAllSpectralComponents();
+
+
+            // V2 (2.4): H_rec = entropie avec shift = 0 (spectres bruts).
+            // Attention : H_rec n'est PAS mPitch = 0 (qui correspondrait au
+            // tempérament égal plat). Il faut shift = 0, c'est-à-dire
+            // mPitch[k] = getRecordedPitchET440AsInt(k).
+            {
+                std::vector<int> savePitch(mPitch);
+                for (int k = 0; k < mNumberOfKeys; ++k)
+                    mPitch[k] = getRecordedPitchET440AsInt(k);
+                setAllSpectralComponents();
+                mH_rec_moteur = computeEntropy();
+                if (!mCommunSpectra.empty())
+                {
+                    setAllSpectralComponentsCommun();
+                    mH_rec_commun = computeEntropyCommun();
+                }
+                mPitch = savePitch;
+                setAllSpectralComponents();
+            }
+            LogI("H_rec_moteur = %f, H_rec_commun = %f", mH_rec_moteur, mH_rec_commun);
+
+
             double Hnew = computeEntropy();
             // If new entropy is lower accept the update, otherwise restore old situation
             if (Hnew < H)

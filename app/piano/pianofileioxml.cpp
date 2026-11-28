@@ -350,15 +350,20 @@ void PianoFileIOXml::read(QIODevice *device, Piano &piano) {
                   spectrum = readSpectrum;
               }
               else if (reader.name() == "spectrumcalculate") {
-                  // V2 (cahier des charges 1.5): spectre avant mollification.
-                  auto& spectrumCalc = key.getSpectrumCalculate();
+                  // V2 (cahier des charges 1.8): spectre avant mollification.
                   std::vector<double> readSpectrum =
                       reader.queryDoubleVectorText();
-                  if (spectrumCalc.size() != readSpectrum.size()) {
-                      LogW("spectrumcalculate sizes do not match");
+                  if (readSpectrum.size() != static_cast<size_t>(Key::NumberOfBins)) {
+                      LogW("spectrumcalculate size mismatch (%zu != %zu), clearing cache",
+                          readSpectrum.size(), static_cast<size_t>(Key::NumberOfBins));
+                      key.setSpectrumCalculate(Key::SpectrumType());
+                      key.setSpectrumCalculateSignature("");
                   }
-                  spectrumCalc = readSpectrum;
+                  else {
+                      key.setSpectrumCalculate(readSpectrum);
+                  }
               }
+
               else if (reader.name() == "spectrumcalculatesignature") {
                   // V2 (1.5): signature du cache.
                   key.setSpectrumCalculateSignature(reader.queryStringText());

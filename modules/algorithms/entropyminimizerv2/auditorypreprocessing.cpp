@@ -27,8 +27,8 @@
 #include "auditorypreprocessing.h"
 
 #include <iostream>
-
 #include <fstream>
+#include <cstdint>   // V2 (1.8): FNV-1a, pour std::uint64_t / std::uint8_t
 
 #include "core/system/eptexception.h"
 #include "core/messages/messagehandler.h"
@@ -890,7 +890,7 @@ void AuditoryPreprocessing::applyHighFrequencyComplement(Key& key,
 /// rappel de la politique suffit.
 ///////////////////////////////////////////////////////////////////////////////
 
-void AuditoryPreprocessing::improveHighFrequencyPeaks()
+void AuditoryPreprocessing::improveHighFrequencyPeaks(const std::vector<bool>* keysToProcess)
 {
     LogI("improveHighFrequencyPeaks: policy=%d (0=legacy, 1=off, 2=complement)",
         mHighFrequencyPeaksPolicy);
@@ -907,6 +907,8 @@ void AuditoryPreprocessing::improveHighFrequencyPeaks()
         double maxGain = 0.0;
         for (int k = start; k < mNumberOfKeys; ++k)
         {
+            if (keysToProcess && (k >= static_cast<int>(keysToProcess->size()) || !(*keysToProcess)[k]))
+                continue;
             int touched = 0;
             double gain = 0.0;
             applyHighFrequencyComplement(mKeys[k], touched, gain);
@@ -922,6 +924,8 @@ void AuditoryPreprocessing::improveHighFrequencyPeaks()
     // Mode legacy : ecrasement (comportement actuel, C6 non corrige).
     for (int k = start; k < mNumberOfKeys; k++)
     {
+        if (keysToProcess && (k >= static_cast<int>(keysToProcess->size()) || !(*keysToProcess)[k]))
+            continue;
         Key& key = mKeys[k];
         SpectrumType& spectrum = key.getSpectrum();
         double f = key.getRecordedFrequency();
@@ -950,27 +954,23 @@ void AuditoryPreprocessing::improveHighFrequencyPeaks()
 //                  Mollify
 //-----------------------------------------------------------------------------
 
-void AuditoryPreprocessing::applyMollifier(Key& key, double scale, double maxBassWidthCents)
+// V2 (2.4): implémentation commune, sur un SpectrumType&.
+// La version Key& ci-dessous appelle celle-ci.
+void AuditoryPreprocessing::applyMollifier(SpectrumType& spectrum,
+    double scale,
+    double maxBassWidthCents)
 {
     LogD("applyMollifier: scale = %f, maxBassWidthCents = %f", scale, maxBassWidthCents);
-    SpectrumType& spectrum = key.getSpectrum();
     SpectrumType copy = spectrum;
-    //double f1 = key.getRecordedFrequency();
 
-    //SpectrumType copy = spectrum;
     int M = static_cast<int>(NumberOfBins);
     for (int m = 0; m < M; ++m)
     {
         double f = mtof(m);
-        // V2 (cahier des charges 1.5): scale = 1 reproduces the legacy width.
-        // scale > 1 widens the mollifier, scale < 1 narrows it.
         double df = scale * (55.0 / f + f / 2000.0);
         int dm = MathTools::roundToInteger(ftom(f + df)) - m;
-        // V2 (cahier des charges 1.5, C7): cap the width in the bass.
-        // dm is in bins of 1 cent, so maxBassWidthCents is in cents.
-        // 1e9 (default) means no cap, i.e. legacy behaviour.
-        if (dm < 1) dm = 1;                          // guard against dm = 0
-        if (dm > maxBassWidthCents)                  // cap in the bass
+        if (dm < 1) dm = 1;
+        if (dm > maxBassWidthCents)
             dm = static_cast<int>(maxBassWidthCents);
         double sum = 0, norm = 0;
         for (int ms = std::max(1, m - 3 * dm); ms <= std::min(m + 3 * dm, M - 1); ms++)
@@ -983,35 +983,81 @@ void AuditoryPreprocessing::applyMollifier(Key& key, double scale, double maxBas
     }
 }
 
+// V2 (1.5): version Key&, qui appelle la surcharge SpectrumType&.
+// Comportement strictement identique à avant.
+void AuditoryPreprocessing::applyMollifier(Key& key,
+    double scale,
+    double maxBassWidthCents)
+{
+    applyMollifier(key.getSpectrum(), scale, maxBassWidthCents);
+}
+
+// V2 (2.4): surcharge de normalizeSpectrum sur un SpectrumType&.
+void AuditoryPreprocessing::normalizeSpectrum(SpectrumType& spectrum)
+{
+    MathTools::normalize(spectrum);
+}
+
+//-----------------------------------------------------------------------------
+//          V2 (1.8, point de suite 2): hash FNV-1a stable
+//-----------------------------------------------------------------------------
+
+// FNV-1a sur les octets bruts. Contrairement à std::hash<double>, le résultat
+// est identique entre compilateurs et plateformes (mêmes bits -> même hash).
+// Utilisé pour la signature du cache spectrumcalculate.
+static std::uint64_t fnv1a_hash(const void* data, std::size_t len,
+    std::uint64_t h = 1469598103934665603ULL)
+{
+    const std::uint8_t* p = static_cast<const std::uint8_t*>(data);
+    for (std::size_t i = 0; i < len; ++i)
+    {
+        h ^= p[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+
 //-----------------------------------------------------------------------------
 //          V2 (1.5): signature du cache spectrumcalculate
 //-----------------------------------------------------------------------------
 
 std::string AuditoryPreprocessing::computeSpectrumCalculateSignature(int k) const
 {
-    // Signature basée sur :
-    //   - spectrum (hash des valeurs)
-    //   - recordedFrequency
-    //   - measuredInharmonicity
-    //   - version du prétraitement
-    // On utilise un hash simple (std::hash) pour éviter d'inclure
-    // <openssl> ou autre. Ce n'est pas cryptographique, mais suffisant
-    // pour détecter un changement.
+    uint64_t h = 14695981039346656037ULL;
+    auto mixBytes = [&h](const void* data, size_t len) {
+        const auto* p = static_cast<const uint8_t*>(data);
+        for (size_t i = 0; i < len; ++i) {
+            h ^= p[i];
+            h *= 1099511628211ULL;
+        }
+        };
+    auto mixDouble = [&mixBytes](double v) {
+        uint64_t bits = 0;
+        std::memcpy(&bits, &v, sizeof(double));
+        mixBytes(&bits, sizeof(bits));
+        };
+    auto mixInt = [&mixBytes](int v) {
+        mixBytes(&v, sizeof(v));
+        };
+
     const Key& key = mKeys[k];
-    const Key::SpectrumType& spectrum = key.getSpectrum();
-
-    std::size_t h = 0;
-    for (double v : spectrum)
-        h ^= std::hash<double>{}(v)+0x9e3779b9 + (h << 6) + (h >> 2);
-
-    h ^= std::hash<double>{}(key.getRecordedFrequency()) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    h ^= std::hash<double>{}(key.getMeasuredInharmonicity()) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    h ^= std::hash<int>{}(PREPROCESSING_VERSION)+0x9e3779b9 + (h << 6) + (h >> 2);
+    for (double v : key.getSpectrum()) mixDouble(v);
+    mixDouble(key.getRecordedFrequency());
+    mixDouble(key.getMeasuredInharmonicity());
+    mixInt(PREPROCESSING_VERSION);
+    mixInt(mInharmonicityPolicy);
+    mixInt(mHighFrequencyPeaksPolicy);
+    mixInt(mBreakKeyIndex);
+    mixInt(mKeyboard.getNumberOfBassKeys());
+    mixInt(mNumberOfKeys);
+    mixInt(mKeyNumberOfA4);
 
     std::ostringstream oss;
     oss << std::hex << h;
     return oss.str();
 }
+
 
 
 

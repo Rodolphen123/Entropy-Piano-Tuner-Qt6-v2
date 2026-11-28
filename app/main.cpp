@@ -141,6 +141,10 @@ int main(int argc, char *argv[]) {
   tp3Log::setLogPath(QString::fromStdString(
       FileManagerForQt::getSingleton().getLogFilePath("log.txt")));
 
+    //#ifdef _DEBUG
+         tp3Log::setLogLevel(tp3Log::LVL_DEBUG);
+    //#endif
+
   int exitCode = -1;
 
   try {

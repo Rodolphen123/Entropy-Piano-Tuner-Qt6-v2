@@ -76,11 +76,21 @@ public:
     //   2 = complement : max(mesure, synthetique) uniquement au-dessus de
     //       5 kHz, sans ecraser ni annuler A4 (defaut V2)
     // Le mode est transmis par entropyminimizerv2.cpp depuis le XML.
-    void improveHighFrequencyPeaks();
+    void improveHighFrequencyPeaks(const std::vector<bool>* keysToProcess = nullptr);
 
     // V2 (cahier des charges 1.5): scale = 1 reproduces the legacy width.
     // maxBassWidthCents caps the mollifier width in the bass (C7). 1e9 = no cap (legacy).
+    // V2 (1.5): applyMollifier sur Key& (existant).
     void applyMollifier(Key& key, double scale = 1.0, double maxBassWidthCents = 50.0);
+
+    // V2 (2.4): surcharge sur un SpectrumType&, pour la chaîne figée de
+    // H_commun (EntropyEvaluator). Même calcul que la version Key&, mais
+    // sans copie de Key.
+    void applyMollifier(SpectrumType& spectrum, double scale, double maxBassWidthCents);
+
+    // V2 (2.4): surcharge de normalizeSpectrum sur un SpectrumType&,
+    // pour la chaîne figée de H_commun.
+    void normalizeSpectrum(SpectrumType& spectrum);
 
     // V2 (cahier des charges 1.3): surcharge optionnelle de breakKeyIndex.
     // 0 (ou valeur <= 0) signifie "utiliser numberOfBassKeys du piano".
@@ -107,10 +117,13 @@ private:
     static double ftom (double f) { return Key::FrequencyToRealIndex(f); }
     static double mtof (int m)    { return Key::IndexToFrequency(m); }
 
+    // V2 (2.4): convertToSPLA existe déjà sur SpectrumType&, donc pas besoin
+    // de surcharge. On l'utilise directement.
+
     // V2 (1.5): version du prétraitement. À incrémenter à chaque modification
     // de la chaîne de prétraitement (normalize, clean, cut, SPLA, extrapolate,
     // improve), pour invalider les caches des anciennes versions.
-    static const int PREPROCESSING_VERSION = 1;
+    static const int PREPROCESSING_VERSION = 2;
 
     // V2 (1.3): détection de la rupture (plus grand saut de ln B).
     // Retourne l'index de la dernière touche du segment "cordes filées"

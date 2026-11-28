@@ -87,6 +87,20 @@ private:
     std::vector<int> mPitch;            ///< Vector of pitches (in cents)
     std::vector<double>mInitialPitch;   ///< Vector of initial pitches
     std::vector<double>mBForCurve;      ///< Smoothed inharmonicity, used only for the initial tuning curve (V2 1.3)
+
+    // V2 (2.4): évaluateur d'entropie (H_moteur et H_commun).
+    std::vector<Key::SpectrumType> mMoteurSpectra;   // copie locale
+    std::vector<Key::SpectrumType> mCommunSpectra;   // copie locale
+    SpectrumType mAccumulatorCommun;                  // accumulateur H_commun
+    double mH_rec_moteur = 0.0;
+    double mH_rec_commun = 0.0;
+    double mH_courbe_moteur = 0.0;
+    double mH_courbe_commun = 0.0;
+
+    // V2 (2.4): helpers pour H_commun.
+    void setAllSpectralComponentsCommun();
+    double computeEntropyCommun();
+
     int mLowerCutoff;                   ///< Lower cutoff for fluctuations
     int mUpperCutoff;                   ///< Upper cutoff for fluctuations
     bool mRecalculateEntropy;           ///< Flag for entropy recalculation (after manual intervention by the user)

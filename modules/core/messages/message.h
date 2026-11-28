@@ -68,6 +68,7 @@ public:
         MSG_STROBOSCOPE_EVENT,                  ///< stroboscope message
         MSG_TUNING_DEVIATION,                   ///< tuning deviation curve has been updated
         MSG_SIGNAL_ANALYSIS,                    ///< Analysis of the signal state changed (start, end)
+        MSG_SPECTRUM_CALCULATE,                 ///< Pre-mollified spectrum cache updated for a key
     };
 
 public:

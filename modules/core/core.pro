@@ -65,6 +65,8 @@ CORE_MESSAGE_SYSTEM_HEADERS = \
     messages/messagetuningdeviation.h \
     messages/messagekeydatachanged.h \
     messages/messagestroboscope.h \
+    messages/messagespectrumcalculate.h \
+
 
 CORE_MESSAGE_SYSTEM_SOURCES = \
     messages/messagelistener.cpp \

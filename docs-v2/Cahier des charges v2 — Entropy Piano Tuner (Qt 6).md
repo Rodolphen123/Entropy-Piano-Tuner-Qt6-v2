@@ -1,4 +1,4 @@
-# Cahier des charges V2.7 — Entropy Piano Tuner (Qt 6) : amélioration acoustique et algorithmique
+# Cahier des charges V2.8 — Entropy Piano Tuner (Qt 6) : amélioration acoustique et algorithmique
 
 *Version consolidée du 27/11/2026. Statuts des constats techniques : **Vérifié** = lu directement dans le code ou dans un fichier .ept ; **Scan** = issu du scan du code, à confirmer par le banc d'essai.*
 
@@ -68,15 +68,19 @@
 
 **En bref.** On améliore la mesure du son (fréquences, inharmonicité) et le nettoyage des spectres avant le calcul.
 
-- **1.0 Échelle FFT et sous-bin de f1** (derrière un paramètre, ancien comportement par défaut) : stocker la longueur exacte N\_fft dans FFTData (fq = q·Fs/N\_fft) ; activer l'interpolation parabolique sous-bin sur ln(amplitude) dans findAccuratePeakFrequency() ; tester estimateFrequencyShift(). Valider d'abord sur signaux synthétiques (balayage de fréquences et de durées) : ne corriger que ce que le banc confirme. Le biais de l'interpolation dépend du fenêtrage (1.7).
+- **1.0 Échelle FFT et sous-bin de f1** (derrière un paramètre, ancien comportement par défaut) : stocker la longueur exacte N\_fft dans FFTData (fq = q·Fs/N\_fft) ; activer l'interpolation parabolique sous-bin sur ln(amplitude) dans findAccuratePeakFrequency() ; tester estimateFrequencyShift() (sous réserve des trois précautions issues de la revue : drapeau de validité de la superposition entre 1 et 2,2 kHz, borne du shift à ±10 cents, correction du biais de −0,5 cent en soustrayant 9,5 et non 10). Valider d'abord sur signaux synthétiques (balayage de fréquences et de durées) : ne corriger que ce que le banc confirme. Le biais de l'interpolation dépend du fenêtrage (1.7).
 - **1.1 Pondération dBA** : conserver la courbe existante de convertToSPLA.
-- **1.2 Ordre du prétraitement** *(copie v2)* : exécuter extrapolateInharmonicity() avant cleanSpectrum().
+- **1.2 Ordre du prétraitement** *(copie v2, validé sur données : 30/21/14 touches concernées E5 → A7 sur les trois .ept de test)* : exécuter extrapolateInharmonicity() avant cleanSpectrum().
 - **1.3 B fin et Break** *(copie v2)* : par touche, recherche en deux étapes (balayage grossier puis optimisation fine) avec pondération des partiels par rapport signal/bruit ; entre touches, ajustement robuste de ln B (Huber ou Theil-Sen) en deux segments, cordes filées \[0 .. breakKeyIndex−1\] et cordes nues \[breakKeyIndex .. N−1\]. breakKeyIndex vaut par défaut mNumberOfBassKeys mais reste modifiable (le pont des basses n'est pas forcément la limite filées / nues) ; à valider en traçant ln B selon la touche. 0 = désactivé. Moins de 6 valeurs valides dans un segment : repli sur getExpectedInharmonicity(f1).
 - **1.4 improveHighFrequencyPeaks** *(copie v2)* : comparer (a) comportement actuel, (b) désactivé, (c) complément uniquement au-dessus de 5 kHz via max(mesuré, synthétique), sans jamais écraser les données réelles ni annuler A4. Choisir sur données.
-- **1.5 Échelle du mollificateur** *(copie v2)* : applyMollifier(key, scale), scale = 1 reproduit l'actuel. Largeur bornée dans les graves (valeur à fixer sur données). Conserver le spectre avant mollification (environ N × NumberOfBins doubles).
+- **1.5 Échelle du mollificateur** *(copie v2)* : applyMollifier(key, scale, maxBassWidthCents), scale = 1 reproduit l'actuel. La largeur df = scale·(55/f + f/2000) est intrinsèquement décroissante avec la fréquence : le plafond maxBassWidthCents s'applique à toutes les fréquences mais ne mord que dans les graves (cap 50 cents : actif sous 44 Hz à scale=1, sous 62 Hz à scale=2, sous 150 Hz à scale=10 ; il ne toucherait l'aigu qu'au-delà de scale ≈ 100, hors domaine d'usage). Valeur à fixer sur données. Conserver le spectre avant mollification (voir 1.8).
 - **1.6 Coupure basse** *(copie v2)* : remplacer 5·ftom(f)/6 par ftom(5.0·f/6.0). À noter dans la non-régression.
 - **1.7 Fenêtrage temporel** : fenêtre paramétrable pour comparer, sur signaux synthétiques, le fondu actuel (2 %), Tukey (α entre 0,1 et 0,2), Hann et Blackman-Harris.
-- 1.8 — Conservation du spectre avant mollification (spectrumcalculate)
+- **1.8 Conservation du spectre avant mollification (spectrumcalculate)** *(implémenté, commit 69f705f, revu le 27/11/2026)* : chaque Key porte un cache optionnel mSpectrumCalculate (spectre pré-mollification) et sa signature. La chaîne (normalize, clean, cut, SPLA, extrapolate, improve) est recalculée à chaque exécution, puis le cache est rempli si absent ou si la signature (hash du spectre, f, B, PREPROCESSING_VERSION) ne correspond plus ; sinon il est réutilisé. Invalidation systématique dans setSpectrum, setRecordedFrequency, setMeasuredInharmonicity et clear(). Pas de repli sur mSpectrum (déjà mollifié) : cache vide = recalcul. Sérialisé dans le .ept seulement s'il est rempli ; les anciens .ept restent lisibles et les nouveaux .ept restent ouvrables par l'ancienne version (élément XML inconnu ignoré). Quatre points de suite :
+  - **Taille des .ept** : le fichier double environ (2 × 10 800 doubles par touche en texte). Assumé ; une précision réduite du cache est possible plus tard si nécessaire.
+  - **Portabilité de la signature** : std::hash<double> n'est pas garanti identique entre compilateurs/plateformes. Conséquence maximale : invalidation silencieuse du cache (jamais de corruption, le hash du spectre protège). Acceptable ; alternative propre si besoin : FNV-1a sur les bits des doubles, stable partout.
+  - **Contrôle de taille au chargement** : dans pianofileioxml.cpp, si la taille lue diffère de NumberOfBins, vider le cache et sa signature au lieu de le conserver avec un simple LogW (risque de restauration incohérente en 3.5).
+  - **Gain effectif reporté à 3.5** : dans le flux actuel la chaîne est recalculée avant le test de signature ; le cache ne sert que de fondation à la remollification multi-échelle (3.5) et à 2.4 (H_rec).
 
 ### Lot 2 — Interface, paramètres et indicateur d'entropie (Qt 6 / Qwt)
 
@@ -85,7 +89,13 @@
 - **2.1 Point de rupture** : champ « Index de la touche de rupture » connecté à mNumberOfBassKeys ; ligne verticale QwtPlotMarker (style VLine) sur le graphique Qwt. Fichiers anciens : champ absent = comportement actuel.
 - **2.2 Audit de la pondération psychoacoustique (avant toute extension)** : déjà établi : conversion dBA (courbe voisine de 40 phones) et seuil dur I0 = 1e-7 appliqué sur un spectre normalisé par touche ; pas de renormalisation après SPLA, donc un poids relatif des touches implicite. Reste à confirmer dans convertToSPLA et initializeSPLAFilter qu'aucune autre correction fréquentielle n'existe. Pas d'égaliseur 6 bandes ni de nouvelle pondération tant que l'audit n'a pas montré qu'une fonction manque et que son effet n'est pas validé expérimentalement (piste préférable à un égaliseur : rendre le niveau de la courbe et le seuil paramétrables).
 - **2.3 Paramètres XML du plug-in** (entropyminimizerv2.xml) : budget de temps, nombre de cycles sans gain, poids de régularisation λ, fenêtre de recherche W, nombre de termes atténués au Break, calendrier multi-échelle, tolérance autour de la courbe initiale. Les constantes de la construction progressive (3.9) restent en dur dans le code.
-- **2.4 Indicateur H\_rec et H\_courbe** : bouton dans CalculationProgressGroup qui calcule l'entropie de l'enregistrement tel quel (décalage nul) et celle de la courbe courante, avec la même chaîne de prétraitement ; mise à jour à chaque retouche manuelle (MSG\_CHANGE\_TUNING\_CURVE) via l'accumulateur incrémental ; ΔH = H\_courbe − H\_rec. Objectif à mesurer (pas une exigence) : moins de 1 ms par retouche. C'est un indicateur de progression, pas une mesure indépendante de la qualité de l'accord (c'est l'objectif de l'optimiseur) ; comparable seulement pour un même piano et les mêmes réglages.
+- **2.4 Indicateur H_rec, H_courbe et double référentiel** :
+  - **Bouton dans l'onglet Calcul (CalculationProgressGroup)** : placé à côté des boutons « Lancer le calcul » et « Info », il déclenche une évaluation statique instantanée sans lancer d'optimisation.
+  - **Double référentiel de mesure** :
+    1. **Entropie moteur (H_moteur)** : calculée avec la chaîne de prétraitement complète de l'algorithme sélectionné (utile pour suivre la descente interne et l'effet des paramètres propres à v2). Les grandeurs H_moteur ne sont comparables qu'au sein d'un même moteur : elles ne servent pas aux comparaisons croisées.
+    2. **Entropie du référentiel commun (H_commun)** : calculée sur les spectres enregistrés du .ept (`<spectrum>`, déjà issus de l'analyse FFT du scan — pas de son brut disponible, cf. C14), avec une chaîne figée indépendante du moteur et du modèle d'inharmonicité : normaliser → convertToSPLA (dBA + seuil) → renormaliser par touche → mollificateur à échelle 1, sans cap. Sont exclus : cleanSpectrum (filtrage par B), improveHighFrequencyPeaks (synthèse de partiels dépendante de B) et cutLowFrequencies (la pondération dBA suffit). La renormalisation après SPLA est indispensable : sans elle, le poids de chaque touche dépendrait de son niveau d'enregistrement, sans rapport avec l'accord (cf. audit 2.2). Ce score permet de comparer objectivement v1, v2, l'enregistrement et toute retouche manuelle sur une base commune.
+  - **Définition versionnée** : la chaîne du référentiel commun est figée, numérotée et enregistrée dans le journal (3.10) ; tout changement ultérieur de la chaîne crée une nouvelle version, pour que les anciens journaux restent interprétables. Noter que ce référentiel n'est pas « sans modèle » : mollificateur, dBA et seuil sont des choix fixes et partagés ; « commun » signifie indépendant du moteur et du modèle d'inharmonicité.
+  - **Suivi temps réel** : mise à jour à chaque retouche manuelle (MSG_CHANGE_TUNING_CURVE) via deux accumulateurs incrémentaux (un par référentiel, environ 15 Mo au total) ; affichage de H_rec, H_courbe et ΔH = H_courbe − H_rec dans les deux référentiels ; objectif < 1 ms par retouche. Indicateur de progression, pas une mesure indépendante de la qualité de l'accord ; comparable seulement pour un même piano et les mêmes réglages.
 
 ### Lot 3 — Cœur de l'optimiseur (entropyminimizerv2)
 
@@ -101,7 +111,7 @@
   - Niveau 3 : translations de section (touches ≤ k ou ≥ k) et recherche locale itérée avec une suite fixe de perturbations plus grandes que le mollificateur (par exemple blocs d'octaves de ±5 cents), puis descente complète.
   - La tolérance de 3.8 s'applique à tous les mouvements. Arrêt : un cycle complet sans amélioration (ΔJ inférieur à 1e-10), borné par le budget de temps et l'annulation (cancelThread()).
 - **3.4 Régularisation de courbure** : pénalité sur la dérivée seconde, λ configurable (défaut 0 pour comparaison brute). Au Break (entre les touches b−1 et b), on atténue les deux termes qui le chevauchent, c'est-à-dire les motifs (b−2, b−1, b) et (b−1, b, b+1), soit 4 touches concernées ; le nombre de termes atténués reste réglable. Pas de borne dure sur la variation entre notes (la pente naturelle atteint 1 à 2 cents par touche aux extrémités).
-- **3.5 Multi-échelle** : recherche sur un calendrier décroissant d'échelles du mollificateur, chaque niveau initialisant le suivant (par exemple 32, 16, 12, 8, 6, 4, 3, 2, 1). L'entropie n'est comparable qu'au sein d'une même échelle.
+- **3.5 Multi-échelle** : recherche sur un calendrier décroissant d'échelles du mollificateur, chaque niveau initialisant le suivant (par exemple 32, 16, 12, 8, 6, 4, 3, 2, 1). L'entropie n'est comparable qu'au sein d'une même échelle. Chaque changement d'échelle restaure le spectre depuis le cache spectrumcalculate (1.8) puis remollifie : jamais de mollification en cascade.
 - **3.6 Raffinement sub-cent** : à l'échelle 1, grille locale de pas 0,1 cent via le décalage fractionnaire de 3.1, puis transmission de p + δ à Piano::getDefiningTempFrequency (qui accepte déjà un double). L'interpolation parabolique n'est utilisée que si l'entropie est lisse à l'échelle du cent. Précision du fichier : les fréquences du .ept sont écrites avec 6 chiffres significatifs, soit une résolution de 0,002 à 0,017 cent selon la fréquence, suffisante pour 0,1 cent ; vérifier à l'implémentation (modules/core/file/, non lu à ce jour) que le format d'écriture XML et les arrondis d'interface ne re-quantifient pas l'accordage raffiné.
 - **3.7 Architecture plug-in** : créer modules/algorithms/entropyminimizerv2/, enregistré via ALGORITHM\_CPP\_START, avec son XML de description, sélectionnable dans l'interface. Le bloc `<algorithms current>` à la fin du .ept indique que le format prévoit un algorithme courant et ses paramètres XML : avant de conclure qu'aucune modification du format n'est nécessaire, tester l'ouverture dans l'ancienne version d'un .ept enregistré avec entropyminimizerv2, et l'inverse.
 - **3.8 Tolérance, courbe initiale et ancrage au tempérament théorique**
@@ -137,9 +147,9 @@
 
 - Export CSV des courbes ; mesure de précision sur signaux synthétiques (erreur de f0 et de B).
 - Déterminisme : dispersion entre exécutions inférieure à 0,01 cent pour une même version compilée sur une même machine ; documenter l'écart éventuel entre machines ou compilateurs.
-- Indicateur (H\_rec, H\_courbe, ΔH) ; critères indépendants : taux de battement et régularité (dérivée seconde des battements) sur octaves, quintes, tierces et sixtes ; comportement au Break ; écart à la courbe de référence (3.8).
+- Indicateur (H\_rec, H\_courbe, ΔH) dans les deux référentiels (H\_moteur et H\_commun) ; critères indépendants : taux de battement et régularité (dérivée seconde des battements) sur octaves, quintes, tierces et sixtes ; comportement au Break ; écart à la courbe de référence (3.8).
 - Comparaison des candidats de 3.9 : mêmes données, mêmes paramètres, critère de succès de 3.9.
-- Validation acoustique : tests A/B (algorithme original contre v2) sur le jeu de référence, et écoute à l'aveugle sur piano réel.
+- Validation acoustique : tests A/B (algorithme original contre v2) sur le jeu de référence (comparés via H\_commun), et écoute à l'aveugle sur piano réel.
 
 ## 4. Critères et contraintes
 
@@ -162,6 +172,7 @@
 - Fenêtre issue de la tolérance de l'ancien module trop étroite : repérer les bords de fenêtre dans le journal.
 - Pianos non standard (moins de 88 touches, A4 à un autre indice) : zone F3–F4 incomplète, indices en dur à proscrire.
 - Régularisation trop forte qui lisse des irrégularités réelles ; déterminisme à la précision des flottants seulement.
+- Cache spectrumcalculate (1.8) : taille des .ept doublée ; signature sensible à la plateforme (std::hash) avec au pire invalidation silencieuse du cache, jamais de corruption.
 
 ## 6. Plan de réalisation incrémental
 
@@ -169,7 +180,7 @@
 
 1. **Phase 0** (Lot 0) : scan complémentaire (mécanisme de plug-in, lecture de modules/core/file/), jeu de référence, mesures de base de l'ancien moteur, journal (3.10).
 2. **Phase 1** : squelette du module entropyminimizerv2 (3.7) avec copie du prétraitement ; corrections 1.2 et 1.6 dans cette copie ; correctifs FFT 1.0 derrière un paramètre, testés à part sur signaux synthétiques.
-3. **Phase 2** (3.1, 3.2, 2.4) : positionnement fractionnaire, accumulateur incrémental, indicateur H\_rec et H\_courbe.
+3. **Phase 2** (3.1, 3.2, 2.4) : positionnement fractionnaire, accumulateur incrémental, indicateur H\_rec et H\_courbe (H\_moteur et H\_commun).
 4. **Phase 3** (3.3, 3.4, 3.8) : optimisation globale (niveaux 1 à 3), régularisation, tolérance cohérente.
 5. **Phase 3 bis** (3.9) : construction progressive, une fois 3.3 fonctionnel et les mesures de base disponibles ; évaluation selon le critère de succès.
 6. **Phase 4** (1.5, 3.5, 3.6) : multi-échelle et raffinement à 0,1 cent.
@@ -194,6 +205,7 @@
 - **V2.3** : construction progressive, journalisation, audit de pondération à la place de l'égaliseur.
 - **V2.4** : ancrage sur le tempérament théorique, Break à 4 touches, trois étapes de 3.9 avec fenêtre égale à la tolérance de l'ancien module, critère de succès, résumés « En bref », annexe des séquences.
 - **V2.5** : nombre de touches variable (N, notes relatives à A4), contenu des .ept établi (C14) et plan d'essais sans WAV, arrondis de getPitchET440, précision XML ramenée à une phrase, test d'ouverture croisée des .ept, séquences complétées (A3 en méthode 1, F3 en méthode 2).
+- **V2.8** : intégration de la revue du 1.5 bis (1.8) : spécification complète du cache spectrumcalculate, clarification de la portée du cap du mollificateur (1.5), dépendance de 3.5 au cache, risques .ept et portabilité du hash, double référentiel H_moteur / H_commun (2.4).
 
 ## 9 — Amélioration à envisager
 - 9.1 Robustesse des valeurs d'inharmonicité B mesurées
@@ -294,6 +306,7 @@ Les étapes 13 à 15 sont ajoutées pour compléter la zone F3–F4. G4 (étape 
 | 14 | La♯2 | A#3 | 37 | −11 |
 
 Couvre les 13 notes de F3 à F4.
+
 
 
 ## Annexe B — Conservation du spectre avant mollification (1.8)

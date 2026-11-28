@@ -33,6 +33,7 @@
 #include "../messages/messagechangetuningcurve.h"
 #include "../messages/messageprojectfile.h"
 #include "../messages/messagekeydatachanged.h"
+#include "../messages/messagespectrumcalculate.h"
 #include "../adapters/modeselectoradapter.h"
 #include "../piano/key.h"
 
@@ -161,6 +162,19 @@ void PianoManager::handleMessage(MessagePtr m)
         MessageHandler::send<MessageKeyDataChanged>(keynumber, mPiano.getKeyPtr(keynumber));
     }
     break;
+    case Message::MSG_SPECTRUM_CALCULATE:
+    {
+        auto message(std::static_pointer_cast<MessageSpectrumCalculate>(m));
+        int keynumber = message->getKeyNumber();
+        if (keynumber >= 0 and keynumber < mPiano.getKeyboard().getNumberOfKeys())
+        {
+            Key& targetKey = mPiano.getKey(keynumber);
+            targetKey.setSpectrumCalculate(message->getSpectrumCalculate());
+            targetKey.setSpectrumCalculateSignature(message->getSignature());
+        }
+    }
+    break;
+
     default:
     break;
     }

@@ -247,7 +247,11 @@ defineReplace(depends_winrtbridge) {
 
 defineReplace(depends_qtmidi) {
     INCLUDEPATH += $$EPT_ROOT_DIR/qtmidi
-    LIBS += -L$$EPT_ROOT_DIR/qtmidi/qtmidi/lib -lqtmidi
+    CONFIG(debug, debug|release) {
+        LIBS += -L$$EPT_ROOT_DIR/qtmidi/qtmidi/debug/lib -lqtmidi
+    } else {
+        LIBS += -L$$EPT_ROOT_DIR/qtmidi/qtmidi/release/lib -lqtmidi
+    }
     win32:LIBS += -lwinmm
     export(INCLUDEPATH)
     export(LIBS)
@@ -256,7 +260,11 @@ defineReplace(depends_qtmidi) {
 
 defineReplace(depends_tp3log) {
     INCLUDEPATH += $$EPT_THIRDPARTY_DIR/tp3log
-    LIBS += -L$$EPT_ROOT_OUT_DIR/thirdparty/tp3log/tp3log/lib -ltp3log
+    CONFIG(debug, debug|release) {
+        LIBS += -L$$EPT_ROOT_OUT_DIR/thirdparty/tp3log/tp3log/debug -ltp3log
+    } else {
+        LIBS += -L$$EPT_ROOT_OUT_DIR/thirdparty/tp3log/tp3log/release -ltp3log
+    }
     tp3LogDLL {
         android:ANDROID_EXTRA_LIBS += $$EPT_ROOT_OUT_DIR/thirdparty/tp3log/tp3log/lib/libtp3log.so
         # win32: tp3log is built as a static library, no DLL to copy
